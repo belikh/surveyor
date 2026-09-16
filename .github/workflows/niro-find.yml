@@ -1,0 +1,220 @@
+# Niro Community Edition — manual penetration test (find-only).
+#
+# Runs `niro find --autonomous` against the Surveyor platform in surveyor/ in
+# checkout mode: Niro builds a harness and starts the app on the runner itself
+# (no --url). The app boots with development fallbacks and a test operator
+# token, exactly as surveyor/scripts/runtime-smoke.sh does, so no application
+# runtime secrets are required.
+#
+# SAFETY — read before changing anything. --autonomous disables the agent
+# CLI's approval prompts and grants it full runner-user host access (files,
+# subprocesses, inherited environment, network egress). Therefore:
+#   * dispatch is manual only (workflow_dispatch); never add push or
+#     pull_request triggers, and never use pull_request_target;
+#   * checkout uses persist-credentials: false so the agent cannot reuse the
+#     Actions token for Git pushes;
+#   * the job holds contents: read and nothing else;
+#   * credentials for agents that are not selected are never put in the
+#     environment (one conditional run step per agent);
+#   * review the revision in the dispatch dialog before you start it — the
+#     agent runs whatever is checked out.
+#
+# FIND ONLY. `niro fix` is deliberately absent: it pushes branches and opens
+# pull requests and needs a GitHub App (NIRO_APP_CLIENT_ID /
+# NIRO_APP_PRIVATE_KEY) that does not exist for this repository yet. Add it
+# only once that App is created and installed.
+#
+# ---------------------------------------------------------------------------
+# Secrets and variables to create (Settings -> Secrets and variables -> Actions)
+# ---------------------------------------------------------------------------
+# Default: DeepSeek (via the Copilot agent's OpenAI-compatible BYOK provider,
+# because Niro's agent CLIs are claude/codex/copilot only — DeepSeek is a model
+# provider, not an agent CLI). Select `agent=copilot` when dispatching.
+#   COPILOT_PROVIDER_API_KEY  your DeepSeek API key (secret).
+#                             platform.deepseek.com -> API keys
+#   COPILOT_PROVIDER_BASE_URL repository variable, defaults to
+#                             https://api.deepseek.com when unset
+#   COPILOT_PROVIDER_TYPE     repository variable, defaults to `openai`
+#   COPILOT_MODEL             repository variable, defaults to `deepseek-flash`
+#                             (V4.1 Flash; set `deepseek-chat` or another id if
+#                             your account names it differently)
+#   Note: with Copilot BYOK, COPILOT_MODEL also becomes the default for every
+#   Niro task tier that niro/niro.yaml does not pin.
+# Claude (optional alternative, `agent=claude`):
+#   CLAUDE_CODE_OAUTH_TOKEN  run `claude setup-token` locally; requires a
+#                            Claude Pro, Max, Team, or Enterprise subscription
+#   ANTHROPIC_API_KEY        alternative to the OAuth token: an Anthropic API key
+# Codex (optional alternative, `agent=codex`), either:
+#   OPENAI_API_KEY           an OpenAI API key, or
+#   CODEX_AUTH_JSON_B64      `base64 < ~/.codex/auth.json | tr -d '\n'`
+#
+# This is the standalone repository: the platform is at the repo root, so the
+# install/build steps run here directly. (The monorepo copy of this workflow
+# adds `working-directory: surveyor` instead.)
+#
+# URL-mode fallback: if the app cannot start on a runner for some reason, pass
+# `target_url`. URL mode is find-only against an already-running target and
+# requires a committed niro/scope.yaml authorising exactly that host and port —
+# never authorise 0.0.0.0/0.
+
+name: Niro find
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Agent CLI to run (DeepSeek uses copilot)
+        type: choice
+        options:
+          - copilot
+          - claude
+          - codex
+        default: copilot
+      goal:
+        description: Pentest goal (default covers the whole Surveyor application)
+        type: string
+        default: "Pentest the whole Surveyor application (a Cloudflare Worker platform; start it locally with the documented npm scripts)"
+      target_url:
+        description: Optional already-running authorised target (URL mode; needs a committed niro/scope.yaml for this host and port)
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# One assessment at a time. A newer dispatch must not cancel a run in flight:
+# the report and knowledge bundle are only written at the end.
+concurrency:
+  group: niro-find-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  find:
+    name: Pentest and report findings
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    # Optional approval gate: create this environment and add required
+    # reviewers to require a second human approval beyond the manual dispatch.
+    environment: niro-autonomous
+    env:
+      NIRO_CONFIG_DIR: niro
+      # Bump deliberately; never float. Resolve the current stable tag with:
+      #   curl -fsSLI -o /dev/null -w '%{url_effective}' \
+      #     https://github.com/apxlabs-ai/niro/releases/latest
+      NIRO_VERSION: v0.1.80
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+
+      # Replicate this repo's CI: install, build, and prove the app boots on
+      # the runner (the same local runtime Niro's harness will start).
+      - name: Install application dependencies
+        run: npm ci
+
+      - name: Build the application
+        run: npm run build
+
+      - name: Verify the app boots locally (pre-flight)
+        run: npm run smoke:runtime
+
+      - name: Install Niro
+        shell: bash
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/apxlabs-ai/niro/main/install.sh | sh
+
+      - name: Show Niro version
+        shell: bash
+        run: niro version
+
+      # One conditional step per agent: an agent's credentials are only in the
+      # environment when that agent is selected, so the autonomous process
+      # cannot read an unused provider's secrets.
+      - name: Run Niro (Claude)
+        if: inputs.agent == 'claude'
+        shell: bash
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT: claude
+          GOAL: ${{ inputs.goal }}
+          TARGET_URL: ${{ inputs.target_url }}
+        run: |
+          args=(find --autonomous --agent="$AGENT" --goal="$GOAL"
+                --config-dir="$NIRO_CONFIG_DIR"
+                --include-findings=true --upload-debug-logs=false)
+          if [ -n "${TARGET_URL:-}" ]; then args+=(--url="$TARGET_URL"); fi
+          niro "${args[@]}"
+
+      - name: Run Niro (Codex)
+        if: inputs.agent == 'codex'
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
+          AGENT: codex
+          GOAL: ${{ inputs.goal }}
+          TARGET_URL: ${{ inputs.target_url }}
+        run: |
+          args=(find --autonomous --agent="$AGENT" --goal="$GOAL"
+                --config-dir="$NIRO_CONFIG_DIR"
+                --include-findings=true --upload-debug-logs=false)
+          if [ -n "${TARGET_URL:-}" ]; then args+=(--url="$TARGET_URL"); fi
+          niro "${args[@]}"
+
+      - name: Run Niro (Copilot — DeepSeek by default)
+        if: inputs.agent == 'copilot'
+        shell: bash
+        env:
+          COPILOT_PROVIDER_API_KEY: ${{ secrets.COPILOT_PROVIDER_API_KEY }}
+          COPILOT_PROVIDER_BASE_URL: ${{ vars.COPILOT_PROVIDER_BASE_URL || 'https://api.deepseek.com' }}
+          COPILOT_PROVIDER_TYPE: ${{ vars.COPILOT_PROVIDER_TYPE || 'openai' }}
+          COPILOT_MODEL: ${{ vars.COPILOT_MODEL || 'deepseek-flash' }}
+          AGENT: copilot
+          GOAL: ${{ inputs.goal }}
+          TARGET_URL: ${{ inputs.target_url }}
+        run: |
+          args=(find --autonomous --agent="$AGENT" --goal="$GOAL"
+                --config-dir="$NIRO_CONFIG_DIR"
+                --include-findings=true --upload-debug-logs=false)
+          if [ -n "${TARGET_URL:-}" ]; then args+=(--url="$TARGET_URL"); fi
+          niro "${args[@]}"
+
+      # archive: false so the download is the PDF itself, not a zip.
+      - name: Upload Niro penetration-test report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          path: ${{ env.NIRO_CONFIG_DIR }}/artifacts/penetration-test-report.pdf
+          archive: false
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload Niro knowledge
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: niro-knowledge
+          path: ${{ env.NIRO_CONFIG_DIR }}/artifacts/knowledge.tar
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Debug logs are the unsafe bundle and are deliberately not uploaded.
+      # To collect them, change --upload-debug-logs=false to true above and
+      # add a step like:
+      #   - name: Upload debug logs (unsafe)
+      #     if: always()
+      #     uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      #     with:
+      #       name: niro-debug-logs-unsafe
+      #       path: niro-debug-logs.tar
+      #       if-no-files-found: ignore
+      #       retention-days: 7

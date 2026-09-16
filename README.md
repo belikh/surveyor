@@ -36,6 +36,28 @@ To install for real, see [RUNBOOK.md](RUNBOOK.md) and
 | `npm run smoke:runtime` | Boot workerd locally and smoke it |
 | `npm run smoke -- <url> [--token t]` | Smoke a deployed installation |
 
+## Security testing (Niro)
+
+`.github/workflows/niro-find.yml` runs a manual, find-only penetration test with
+[Niro Community Edition](https://github.com/apxlabs-ai/niro), in checkout mode:
+Niro builds a harness and starts the app on the runner itself. It never creates
+branches or pull requests, runs only when dispatched by hand, and publishes the
+penetration-test report and knowledge bundle as 30-day artifacts.
+
+DeepSeek is the default model, reached through the Copilot agent's
+OpenAI-compatible BYOK provider. Configure (and later rotate) the credentials
+with the wizard:
+
+```sh
+scripts/setup-deepseek-niro.sh
+```
+
+Then dispatch:
+
+```sh
+gh workflow run niro-find.yml -f agent=copilot
+```
+
 ## Principles
 
 The platform inherits this repository's constitution: source protection
