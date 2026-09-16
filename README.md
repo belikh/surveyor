@@ -40,9 +40,13 @@ To install for real, see [RUNBOOK.md](RUNBOOK.md) and
 
 `.github/workflows/niro-find.yml` runs a manual, find-only penetration test with
 [Niro Community Edition](https://github.com/apxlabs-ai/niro), in checkout mode:
-Niro builds a harness and starts the app on the runner itself. It never creates
-branches or pull requests, runs only when dispatched by hand, and publishes the
-penetration-test report and knowledge bundle as 30-day artifacts.
+Niro builds a harness and starts the app on the runner itself. The committed
+`niro/` profile owns that lifecycle — `niro/harness/start.sh` boots the worker
+on the runner, `niro/harness/seed.sh` creates the test baseline and generates
+the credentials Niro consumes, and `niro/scope.yaml` authorizes only the
+loopback listener. It never creates branches or pull requests, runs only when
+dispatched by hand, and publishes the penetration-test report and knowledge
+bundle as 30-day artifacts.
 
 DeepSeek is the default model, reached through the Copilot agent's
 OpenAI-compatible BYOK provider. Configure (and later rotate) the credentials

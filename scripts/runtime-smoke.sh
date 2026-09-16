@@ -11,10 +11,27 @@ cd "$(dirname "$0")/.."
 
 npm run build >/dev/null
 
-npx wrangler dev --local --port "$PORT" --ip 127.0.0.1 \
+# wrangler dev spawns children (npx -> wrangler -> workerd). Killing only the
+# npx wrapper leaves workerd bound to the port after this script exits, which
+# collides with anything that boots the app next — including Niro's harness.
+# Run wrangler in its own process group (setsid, where available) and tear the
+# whole group down.
+SETSID=()
+if command -v setsid >/dev/null 2>&1; then SETSID=(setsid); fi
+${SETSID[@]+"${SETSID[@]}"} npx wrangler dev --local --port "$PORT" --ip 127.0.0.1 \
   --var "OPERATOR_TOKEN:$TOKEN" >"$LOG" 2>&1 &
-WRANGLER_PID=$!
-trap 'kill "$WRANGLER_PID" 2>/dev/null || true; rm -f "$LOG"' EXIT
+WRANGLER_PGID=$!
+cleanup() {
+  kill -TERM -- "-$WRANGLER_PGID" 2>/dev/null || true
+  kill -TERM "$WRANGLER_PGID" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    kill -0 -- "-$WRANGLER_PGID" 2>/dev/null || break
+    sleep 0.5
+  done
+  kill -KILL -- "-$WRANGLER_PGID" 2>/dev/null || true
+  rm -f "$LOG"
+}
+trap cleanup EXIT
 
 for _ in $(seq 1 90); do
   if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/" 2>/dev/null)" = "200" ]; then

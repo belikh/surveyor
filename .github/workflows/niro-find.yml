@@ -1,10 +1,10 @@
 # Niro Community Edition — manual penetration test (find-only).
 #
 # Runs `niro find --autonomous` against the Surveyor platform in surveyor/ in
-# checkout mode: Niro builds a harness and starts the app on the runner itself
-# (no --url). The app boots with development fallbacks and a test operator
-# token, exactly as surveyor/scripts/runtime-smoke.sh does, so no application
-# runtime secrets are required.
+# checkout mode: Niro operates the committed niro/ harness and starts the app
+# on the runner itself (no --url). The app boots with development fallbacks and
+# a test operator token, exactly as surveyor/scripts/runtime-smoke.sh does, so
+# no application runtime secrets are required.
 #
 # SAFETY — read before changing anything. --autonomous disables the agent
 # CLI's approval prompts and grants it full runner-user host access (files,
@@ -73,7 +73,7 @@ on:
       goal:
         description: Pentest goal (default covers the whole Surveyor application)
         type: string
-        default: "Pentest the whole Surveyor application (a Cloudflare Worker platform; start it locally with the documented npm scripts)"
+        default: "Pentest the whole Surveyor application (a Cloudflare Worker platform; start it locally with the committed niro/harness scripts)"
       target_url:
         description: Optional already-running authorised target (URL mode; needs a committed niro/scope.yaml for this host and port)
         type: string
@@ -103,6 +103,9 @@ jobs:
       #     https://github.com/apxlabs-ai/niro/releases/latest
       NIRO_VERSION: v0.1.80
       WRANGLER_SEND_METRICS: "false"
+      # Belt and braces: CI already disables Copilot CLI self-update, but a
+      # self-updated CLI would escape the identity pin below.
+      COPILOT_AUTO_UPDATE: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,6 +118,19 @@ jobs:
           node-version: "24"
           cache: npm
 
+      # Niro v0.1.80's developer-agent MCP server only accepts Copilot CLI
+      # sessions that announce the MCP clientInfo name `github-copilot` /
+      # `github-copilot-developer`. @github/copilot 1.0.80 sends
+      # `github-copilot-developer`; 1.0.81 and later send `copilot-cli`, and
+      # every MCP call is refused ("niro does not support developer agent ...
+      # Supported: Claude Code, GitHub Copilot, OpenAI Codex"), which stalls
+      # the run. Niro installs the latest Copilot CLI when none is on PATH, so
+      # pin the last accepted version here. Re-evaluate when Niro accepts
+      # `copilot-cli` (v0.1.81-dev.1 still rejects it).
+      - name: Install Copilot CLI (pinned for Niro v0.1.80 identity)
+        if: inputs.agent == 'copilot'
+        run: npm install --global @github/copilot@1.0.80
+
       # Replicate this repo's CI: install, build, and prove the app boots on
       # the runner (the same local runtime Niro's harness will start).
       - name: Install application dependencies
@@ -123,7 +139,11 @@ jobs:
       - name: Build the application
         run: npm run build
 
+      # A non-default port: Niro's harness starts the target on the app's
+      # conventional local port, so the pre-flight must not occupy it.
       - name: Verify the app boots locally (pre-flight)
+        env:
+          PORT: "8799"
         run: npm run smoke:runtime
 
       - name: Install Niro
@@ -188,13 +208,16 @@ jobs:
           if [ -n "${TARGET_URL:-}" ]; then args+=(--url="$TARGET_URL"); fi
           niro "${args[@]}"
 
-      # archive: false so the download is the PDF itself, not a zip.
+      # Uploaded as a named, zipped artifact so `gh run download` can fetch it:
+      # an archive: false artifact is a raw file in blob storage, which the gh
+      # CLI cannot extract ("not a valid zip file"). The web UI downloads
+      # either form directly.
       - name: Upload Niro penetration-test report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
+          name: niro-penetration-test-report
           path: ${{ env.NIRO_CONFIG_DIR }}/artifacts/penetration-test-report.pdf
-          archive: false
           if-no-files-found: ignore
           retention-days: 30
 

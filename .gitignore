@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.wrangler/
+*.log
+
+# Niro run state — generated, never committed. See niro/README.md.
+niro/credentials.yaml
+niro/fixtures.yaml
+niro/state/
+niro/findings/
+niro/harness/run/
+niro/artifacts/

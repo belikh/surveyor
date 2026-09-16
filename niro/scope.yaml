@@ -1,0 +1,10 @@
+# Network destinations Niro may reach. This profile is the local checkout
+# started by harness/start.sh, so the only authorized target is the app's
+# loopback listener. Never authorize a wider range here.
+#
+# Niro maps localhost and 127.0.0.1 to the host, so the attack container
+# reaches the app even though it runs on the runner's host.
+
+targets:
+  - target: "127.0.0.1:8788"
+  - target: "localhost:8788"

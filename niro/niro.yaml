@@ -1,0 +1,13 @@
+# Niro project configuration for the local checkout profile.
+#
+# The GitHub Actions workflow (`.github/workflows/niro-find.yml`) selects this
+# directory with `--config-dir=niro` and runs find-only, checkout mode: Niro
+# operates `harness/start.sh` on the runner and tests the app it starts.
+#
+# See README.md in this directory and harness/README.md for the contract.
+
+version: 1
+
+# CI/automation: demote block-tier reflection concerns to advisory so a
+# non-interactive run proceeds and surfaces them for audit instead.
+headless: true
