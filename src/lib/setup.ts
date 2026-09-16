@@ -4,6 +4,7 @@
 // of this state — they live in the Cloudflare secret store only.
 
 import { z } from "zod";
+import { isAllowedProviderBaseUrl } from "./net";
 
 export const SetupPhase = z.enum([
   "welcome",
@@ -14,17 +15,50 @@ export const SetupPhase = z.enum([
 ]);
 export type SetupPhase = z.infer<typeof SetupPhase>;
 
-export const ProviderEntrySchema = z.object({
-  /** Registry name (e.g. "groq") or "custom" for OpenAI-compatible. */
-  kind: z.enum(["groq", "tokenrouter", "openai-compatible"]),
-  label: z.string().min(1).max(64),
-  /** Never a key value — the secret slot name it was written to. */
-  secret_slot: z.string().min(1).max(64),
-  model: z.string().min(1).max(128),
-  base_url: z.string().url().optional(),
-  /** Declared abilities, e.g. ["vision"], so lanes route correctly. */
-  capabilities: z.array(z.string().min(1).max(32)).max(8).optional(),
-});
+/** The only environment bindings a provider entry may read a key from.
+ *  Anything else (OPERATOR_TOKEN, ENCRYPTION_KEY, SERVER_SECRET, …) must
+ *  never be resolvable as a provider credential. */
+export const PROVIDER_SLOTS: ReadonlySet<string> = new Set([
+  "GROQ_API_KEY",
+  "TOKENROUTER_API_KEY",
+]);
+
+export function isProviderSlot(slot: string): boolean {
+  return PROVIDER_SLOTS.has(slot);
+}
+
+export const ProviderEntrySchema = z
+  .object({
+    /** Registry name (e.g. "groq") or "custom" for OpenAI-compatible. */
+    kind: z.enum(["groq", "tokenrouter", "openai-compatible"]),
+    label: z.string().min(1).max(64),
+    /** Never a key value — the secret slot name it was written to. */
+    secret_slot: z.string().min(1).max(64),
+    model: z.string().min(1).max(128),
+    base_url: z.string().url().optional(),
+    /** Declared abilities, e.g. ["vision"], so lanes route correctly. */
+    capabilities: z.array(z.string().min(1).max(32)).max(8).optional(),
+  })
+  .superRefine((p, ctx) => {
+    if (!isProviderSlot(p.secret_slot)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["secret_slot"],
+        message: "not a provider key slot",
+      });
+    }
+    if (
+      p.kind === "openai-compatible" &&
+      p.base_url !== undefined &&
+      !isAllowedProviderBaseUrl(p.base_url)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["base_url"],
+        message: "provider base URL must be https to a public host",
+      });
+    }
+  });
 export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 
 export const InstrumentSchema = z.object({

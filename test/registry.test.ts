@@ -13,8 +13,9 @@ function entry(over: Partial<ProviderEntry> = {}): ProviderEntry {
   return {
     kind: "openai-compatible",
     label: "test",
-    secret_slot: "TEST_KEY",
+    secret_slot: "GROQ_API_KEY",
     model: "test-model",
+    base_url: "https://llm.example/v1",
     ...over,
   };
 }
@@ -30,11 +31,11 @@ function stateWith(providers: ProviderEntry[]): SetupState {
 
 describe("resolveChain", () => {
   it("honours operator order and skips entries with missing secrets", () => {
-    const a = entry({ label: "a", secret_slot: "A_KEY" });
-    const b = entry({ label: "b", secret_slot: "B_KEY" });
+    const a = entry({ label: "a", secret_slot: "GROQ_API_KEY" });
+    const b = entry({ label: "b", secret_slot: "TOKENROUTER_API_KEY" });
     const r: ChainResolution = resolveChain(
       stateWith([a, b]),
-      (slot) => slot === "B_KEY",
+      (slot) => slot === "TOKENROUTER_API_KEY",
     );
     expect(r.entries.map((e) => e.label)).toEqual(["b"]);
     expect(r.degraded).toBe(false);
@@ -49,8 +50,8 @@ describe("resolveChain", () => {
   });
 
   it("treats groq/tokenrouter kinds the same as customs for availability", () => {
-    const g = entry({ kind: "groq", label: "g", secret_slot: "G" });
-    const t = entry({ kind: "tokenrouter", label: "t", secret_slot: "T" });
+    const g = entry({ kind: "groq", label: "g", secret_slot: "GROQ_API_KEY" });
+    const t = entry({ kind: "tokenrouter", label: "t", secret_slot: "TOKENROUTER_API_KEY" });
     const r = resolveChain(stateWith([g, t]), () => true);
     expect(r.entries.map((e) => e.label)).toEqual(["g", "t"]);
   });

@@ -3,7 +3,7 @@
 // dropped by the proposers, and every stored angle is fenced (untrusted).
 
 import { unwrap } from "./evidence";
-import { proposeAngles, rankAngles } from "./engine";
+import { normaliseTopic, proposeAngles, rankAngles } from "./engine";
 import { proposeAnglesLive, type ModelClient, type Turn } from "./serve";
 import { openText, sealText, type VaultKit } from "./vault";
 
@@ -59,6 +59,7 @@ export async function proposeAndStoreAngles(
 
   const now = new Date().toISOString();
   const stored: StoredAngle[] = [];
+  const canonicalTopics = topics.map(normaliseTopic);
   for (let i = 0; i < ranked.length; i++) {
     const a = ranked[i];
     const id = crypto.randomUUID();
@@ -69,7 +70,7 @@ export async function proposeAndStoreAngles(
       .bind(
         id,
         a.title,
-        JSON.stringify(topics),
+        JSON.stringify(canonicalTopics),
         await sealText(kit, a.rationale),
         JSON.stringify(a.exhibits),
         i,

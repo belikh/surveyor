@@ -4,7 +4,12 @@
 // Secret VALUES never appear here — availability is a boolean per slot.
 
 import { z } from "zod";
-import type { ProviderEntry, SetupState } from "./setup";
+import { isAllowedProviderBaseUrl } from "./net";
+import {
+  isProviderSlot,
+  type ProviderEntry,
+  type SetupState,
+} from "./setup";
 
 export type UsableEntry = ProviderEntry;
 
@@ -15,11 +20,51 @@ export interface ChainResolution {
   warning: string | null;
 }
 
+/** An entry is servable only when its slot is a provider key slot and, for
+ *  openai-compatible kinds, its base URL passes the destination policy. */
+function isServableEntry(p: ProviderEntry): boolean {
+  if (!isProviderSlot(p.secret_slot)) return false;
+  if (p.kind === "openai-compatible") {
+    return (
+      typeof p.base_url === "string" && isAllowedProviderBaseUrl(p.base_url)
+    );
+  }
+  return true;
+}
+
+/**
+ * Read-time migration for stored setup state: drop entries that can no
+ * longer be served (hostile or stale slots, unsafe base URLs) so
+ * pre-existing state cannot keep the config-write secret-read hole open.
+ * Tolerates unknown shapes; the caller still runs the full schema parse.
+ */
+export function sanitiseStoredSetup(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+  const state = raw as Record<string, unknown>;
+  if (!Array.isArray(state.providers)) return raw;
+  const providers = state.providers.filter((p) => {
+    if (typeof p !== "object" || p === null) return false;
+    const e = p as Record<string, unknown>;
+    if (typeof e.secret_slot !== "string" || !isProviderSlot(e.secret_slot)) {
+      return false;
+    }
+    if (e.kind === "openai-compatible") {
+      return (
+        typeof e.base_url === "string" && isAllowedProviderBaseUrl(e.base_url)
+      );
+    }
+    return true;
+  });
+  return { ...state, providers };
+}
+
 export function resolveChain(
   state: SetupState,
   hasSecret: (slot: string) => boolean,
 ): ChainResolution {
-  const entries = state.providers.filter((p) => hasSecret(p.secret_slot));
+  const entries = state.providers.filter(
+    (p) => isServableEntry(p) && hasSecret(p.secret_slot),
+  );
   if (entries.length === 0) {
     return {
       entries: [],
@@ -80,6 +125,12 @@ export async function validateCustomProvider(
     return { ok: false, error: `invalid provider: ${parsed.error.message}` };
   }
   const { label, baseUrl, apiKey } = parsed.data;
+  if (!isAllowedProviderBaseUrl(baseUrl)) {
+    return {
+      ok: false,
+      error: `provider "${label}" base URL not allowed: https to a public host is required`,
+    };
+  }
   const url = baseUrl.replace(/\/+$/, "") + "/models";
   let res: Response;
   try {

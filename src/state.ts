@@ -2,6 +2,7 @@
 
 import type { Bindings } from "./env";
 import { SetupStateSchema, type SetupState } from "./lib/setup";
+import { sanitiseStoredSetup } from "./lib/registry";
 import { createVaultKit, type VaultKit } from "./lib/vault";
 import SCHEMA_SQL from "./db/schema.sql";
 
@@ -75,7 +76,15 @@ export async function boot(env: Bindings): Promise<AppState> {
     const row = await env.DB.prepare(
       "SELECT state_json FROM setup_state WHERE id = 1",
     ).first<{ state_json: string }>();
-    cached = row ? SetupStateSchema.parse(JSON.parse(row.state_json)) : FRESH;
+    const raw: unknown = row ? JSON.parse(row.state_json) : FRESH;
+    // Boot migration: stored entries that name a non-provider slot or an
+    // unsafe base URL are dropped before the strict schema parse, and the
+    // cleaned state is written back once so the hole cannot reopen.
+    const sanitised = sanitiseStoredSetup(raw);
+    cached = SetupStateSchema.parse(sanitised);
+    if (row && JSON.stringify(sanitised) !== JSON.stringify(raw)) {
+      await putSetup(cached);
+    }
     return cached;
   };
   const putSetup = async (next: SetupState) => {

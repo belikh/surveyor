@@ -166,7 +166,11 @@ async function resumeFlow(code, status) {
 }
 async function roundLoop() {
   for (;;) {
-    const r = await api("/api/intake/" + S.id + "/rounds", { method: "POST" });
+    const r = await api("/api/intake/" + S.id + "/rounds", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ access_code: S.code }),
+    });
     if (r.done || r.questions.length === 0) return showDone();
     const answers = [];
     const box = el("div", {});
@@ -183,7 +187,7 @@ async function roundLoop() {
     await api("/api/intake/" + S.id + "/steps", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ answers }),
+      body: JSON.stringify({ answers, access_code: S.code }),
     });
   }
 }
@@ -202,7 +206,8 @@ function loadPdfTools() {
 async function sendAttachment(id, name, type, blob) {
   const res = await fetch(
     "/api/intake/" + id + "/attachments?filename=" + encodeURIComponent(name) +
-      "&media_type=" + encodeURIComponent(type),
+      "&media_type=" + encodeURIComponent(type) +
+      "&access_code=" + encodeURIComponent(S.code),
     { method: "POST", body: blob },
   );
   if (!res.ok) throw new Error(String(res.status));

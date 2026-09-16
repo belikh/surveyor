@@ -37,7 +37,9 @@ import {
   type ProvisionReceipt,
 } from "./lib/provision";
 import { createCloudflareApi } from "./lib/cfapi";
-import { liveClient } from "./lib/providers";
+import { liveClient, hasSecretValue } from "./lib/providers";
+import { isAllowedProviderBaseUrl } from "./lib/net";
+import { isProviderSlot } from "./lib/setup";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
 import corpus from "./routes/corpus";
@@ -229,12 +231,11 @@ app.get("/api/setup/token-guidance", (c) =>
   c.json({ scopes: REQUIRED_SCOPES, guidance: REVOCATION_GUIDANCE }),
 );
 
-// Secret presence: a slot counts as configured when its binding is set.
-// Only truthiness is ever inspected — values are never read, logged, or
-// returned (constitution II).
+// Secret presence: a slot counts as configured only when it is one of the
+// provider key slots AND its binding is set. Only truthiness is ever
+// inspected — values are never read, logged, or returned (constitution II).
 function hasSecret(env: Bindings, slot: string): boolean {
-  const v = (env as unknown as Record<string, unknown>)[slot];
-  return typeof v === "string" && v.length > 0;
+  return hasSecretValue(env, slot);
 }
 
 function deny(code: 401 | 404) {
@@ -302,8 +303,13 @@ const KeyEntrySchema = z.object({
   kind: z.enum(["groq", "tokenrouter", "openai-compatible"]),
   label: z.string().min(1).max(64),
   model: z.string().min(1).max(128),
-  base_url: z.string().url().max(2048).optional(),
-  secret_slot: z.string().regex(SECRET_SLOT),
+  base_url: z
+    .string()
+    .url()
+    .max(2048)
+    .refine(isAllowedProviderBaseUrl, "base URL must be https to a public host")
+    .optional(),
+  secret_slot: z.string().regex(SECRET_SLOT).refine(isProviderSlot, "not a provider key slot"),
   api_key: z.string().min(1).max(512),
 });
 

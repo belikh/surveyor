@@ -79,6 +79,7 @@ describe("intake walkthrough", () => {
       headers: auth,
       body: JSON.stringify({
         answers: [{ q: "role", value: "APO", topic: "role" }],
+        access_code: code,
       }),
     });
     expect(step.status).toBe(200);
@@ -98,7 +99,7 @@ describe("intake walkthrough", () => {
       await callApp(env, `/api/intake/${id}/rounds`, {
         method: "POST",
         headers: auth,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ access_code: code }),
       })
     ).json()) as { questions: Array<{ topic: string }> };
     const topics1 = r1.questions.map((q) => q.topic);
@@ -108,14 +109,14 @@ describe("intake walkthrough", () => {
       method: "POST",
       headers: auth,
       body: JSON.stringify({
-        answers: topics1.map((t) => ({ q: t, value: "some testimony", topic: t })),
+        answers: topics1.map((t) => ({ q: t, value: "some testimony", topic: t })), access_code: code,
       }),
     });
     const r2 = (await (
       await callApp(env, `/api/intake/${id}/rounds`, {
         method: "POST",
         headers: auth,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ access_code: code }),
       })
     ).json()) as { questions: Array<{ topic: string }>; done?: boolean };
     for (const q of r2.questions ?? []) {
@@ -152,6 +153,7 @@ describe("intake walkthrough", () => {
         answers: [
           { q: "story", value: `My supervisor ${marker} rostered me`, topic: "roster" },
         ],
+        access_code: created.access_code,
       }),
     });
     // Full D1 dump must not contain the marker or the raw sentence.
@@ -214,6 +216,7 @@ describe("review findings", () => {
       headers: auth,
       body: JSON.stringify({
         answers: [{ q: "roster", value: "rosters are chaos", topic: "roster" }],
+        access_code: code,
       }),
     });
     const child = (await (
@@ -227,7 +230,7 @@ describe("review findings", () => {
       await callApp(env, `/api/intake/${child.id}/rounds`, {
         method: "POST",
         headers: auth,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ access_code: code }),
       })
     ).json()) as { questions: Array<{ topic: string }> };
     expect(r.questions.map((q) => q.topic)).not.toContain("roster");
@@ -250,6 +253,7 @@ describe("review findings", () => {
         answers: [
           { q: "story", value: "I told Maddie about the roster", topic: "roster" },
         ],
+        access_code: created.access_code,
       }),
     });
     const db = env.DB as FakeD1;
@@ -266,5 +270,91 @@ describe("review findings", () => {
   it("gates the groups endpoint behind the operator token", async () => {
     const res = await callApp(makeEnv(), "/api/intake/entities/groups");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("submission writes require the access code", () => {
+  async function mint(env: Record<string, unknown>) {
+    const pow = await solvedPow(env);
+    return (await (
+      await callApp(env, "/api/intake", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ pow }),
+      })
+    ).json()) as { id: string; access_code: string };
+  }
+
+  it("rejects missing and foreign codes without storing anything", async () => {
+    const env = makeEnv();
+    const victim = await mint(env);
+    const decoy = await mint(env);
+
+    const noCode = await callApp(env, `/api/intake/${victim.id}/steps`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        answers: [{ q: "x", value: "v", topic: "roster" }],
+      }),
+    });
+    expect(noCode.status).toBe(422);
+
+    const foreign = await callApp(env, `/api/intake/${victim.id}/steps`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        answers: [{ q: "x", value: "v", topic: "roster" }],
+        access_code: decoy.access_code,
+      }),
+    });
+    expect(foreign.status).toBe(404);
+
+    const roundsNoCode = await callApp(env, `/api/intake/${victim.id}/rounds`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({}),
+    });
+    expect(roundsNoCode.status).toBe(422);
+
+    const roundsForeign = await callApp(env, `/api/intake/${victim.id}/rounds`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ access_code: decoy.access_code }),
+    });
+    expect(roundsForeign.status).toBe(404);
+
+    const db = env.DB as FakeD1;
+    const messages = await db
+      .prepare("SELECT COUNT(*) AS n FROM messages")
+      .first<{ n: number }>();
+    const topics = await db
+      .prepare("SELECT COUNT(*) AS n FROM topics")
+      .first<{ n: number }>();
+    expect(messages?.n).toBe(0);
+    expect(topics?.n).toBe(0);
+  });
+
+  it("rejects writes to a closed submission with 409", async () => {
+    const env = makeEnv();
+    const { id, access_code } = await mint(env);
+    await (env.DB as FakeD1)
+      .prepare("UPDATE submissions SET status = 'complete' WHERE id = ?")
+      .bind(id)
+      .run();
+    const steps = await callApp(env, `/api/intake/${id}/steps`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        answers: [{ q: "x", value: "v", topic: "roster" }],
+        access_code,
+      }),
+    });
+    expect(steps.status).toBe(409);
+    const rounds = await callApp(env, `/api/intake/${id}/rounds`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ access_code }),
+    });
+    expect(rounds.status).toBe(409);
   });
 });

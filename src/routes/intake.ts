@@ -18,17 +18,18 @@ import {
   AddendumBodySchema,
   CreateBodySchema,
   ResumeBodySchema,
+  RoundsBodySchema,
   StepsBodySchema,
   quarantineText,
 } from "../lib/intake";
 import { groundedQuestions, ROUNDS_MAX } from "../lib/rounds";
+import { normaliseTopic } from "../lib/engine";
 import { completeAndRetrigger } from "../lib/retrigger";
 import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
 import {
   ATTACH_MAX_BYTES,
   ATTACH_TOTAL_BYTES,
-  attachmentBytes,
   attachmentLane,
   drainAttachmentById,
 } from "../lib/attachments";
@@ -61,6 +62,44 @@ function idOr404(c: {
   const parsed = IdParamSchema.safeParse(c.req.param("id"));
   if (!parsed.success) return c.json({ error: "not_found" }, 404);
   return parsed.data;
+}
+
+/**
+ * Resolve a submission only when the supplied access code matches its code
+ * HMAC. An unknown id and a mismatched code return the same null, so these
+ * routes stop doubling as a submission-existence oracle.
+ */
+async function submissionByCode(
+  c: { env: Bindings },
+  id: string,
+  accessCode: string,
+): Promise<{
+  id: string;
+  status: string;
+  round: number;
+  parent_id: string | null;
+} | null> {
+  const app = await getState(c.env);
+  const row = await c.env.DB.prepare(
+    "SELECT id, code_hmac, status, round, parent_id FROM submissions WHERE id = ?",
+  )
+    .bind(id)
+    .first<{
+      id: string;
+      code_hmac: string;
+      status: string;
+      round: number;
+      parent_id: string | null;
+    }>();
+  if (!row) return null;
+  const hmac = await codeHmac(app.kit, accessCode);
+  if (hmac !== row.code_hmac) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    round: row.round,
+    parent_id: row.parent_id,
+  };
 }
 
 async function verifyTurnstile(
@@ -124,10 +163,11 @@ intake.post("/:id/steps", async (c) => {
   const id = idOr;
   const parsed = StepsBodySchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
-  const sub = await c.env.DB.prepare(
-    "SELECT id FROM submissions WHERE id = ?",
-  ).bind(id).first();
+  const sub = await submissionByCode(c, id, parsed.data.access_code);
   if (!sub) return c.json({ error: "not_found" }, 404);
+  if (sub.status !== "open") {
+    return c.json({ error: "submission_closed" }, 409);
+  }
 
   const existing = await c.env.DB.prepare(
     "SELECT MAX(seq) AS maxSeq FROM messages WHERE submission_id = ?",
@@ -154,7 +194,7 @@ intake.post("/:id/steps", async (c) => {
     }
     batch.push({
       sql: "INSERT INTO topics (submission_id, topic, source) VALUES (?, ?, 'baseline') ON CONFLICT(submission_id, topic) DO NOTHING",
-      params: [id, a.topic],
+      params: [id, normaliseTopic(a.topic)],
     });
   }
   // FakeD1.batch takes prepared statements; real D1 too — build them here.
@@ -188,10 +228,12 @@ intake.post("/:id/attachments", async (c) => {
   const idOr = idOr404(c);
   if (typeof idOr !== "string") return idOr;
   const id = idOr;
-  const sub = await c.env.DB.prepare("SELECT id FROM submissions WHERE id = ?")
-    .bind(id)
-    .first();
+  const code = c.req.query("access_code") ?? "";
+  const sub = await submissionByCode(c, id, code);
   if (!sub) return c.json({ error: "not_found" }, 404);
+  if (sub.status !== "open") {
+    return c.json({ error: "submission_closed" }, 409);
+  }
   if (!c.env.CORPUS) return c.json({ error: "attachments_unavailable" }, 503);
   const filename = (c.req.query("filename") ?? "attachment").slice(0, 256);
   const mediaType = (c.req.query("media_type") ?? "application/octet-stream").slice(
@@ -210,18 +252,17 @@ intake.post("/:id/attachments", async (c) => {
   if (bytes.length > ATTACH_MAX_BYTES) {
     return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
   }
-  const used = await attachmentBytes(c.env.DB, id);
-  if (used + bytes.length > ATTACH_TOTAL_BYTES) {
-    return c.json(
-      { error: "quota_exceeded", detail: "200 MB per submission" },
-      413,
-    );
-  }
   const attId = crypto.randomUUID();
   const key = `attachments/${id}/${attId}`;
-  await c.env.CORPUS.put(key, bytes);
-  await c.env.DB.prepare(
-    "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, reason, retry_after, created_at) VALUES (?, ?, ?, ?, ?, 'uploaded', ?, NULL, NULL, ?)",
+  const now = new Date().toISOString();
+  // Reserve quota and row in one statement: a read-then-write lets
+  // concurrent uploads all pass the same stale SUM. INSERT ... SELECT ...
+  // WHERE is a single SQLite statement, so D1 applies it under the write
+  // lock and the quota cannot be raced.
+  const reserved = await c.env.DB.prepare(
+    "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, reason, retry_after, created_at) " +
+      "SELECT ?, ?, ?, ?, ?, 'uploaded', ?, NULL, NULL, ? " +
+      "WHERE (SELECT COALESCE(SUM(size_bytes), 0) FROM attachments WHERE submission_id = ?) + ? <= ?",
   )
     .bind(
       attId,
@@ -230,9 +271,28 @@ intake.post("/:id/attachments", async (c) => {
       mediaType,
       bytes.length,
       key,
-      new Date().toISOString(),
+      now,
+      id,
+      bytes.length,
+      ATTACH_TOTAL_BYTES,
     )
     .run();
+  if (reserved.meta.changes === 0) {
+    return c.json(
+      { error: "quota_exceeded", detail: "200 MB per submission" },
+      413,
+    );
+  }
+  // Bytes reach R2 only after the reservation; a failed write rolls the
+  // reservation back so a rejected request leaves no orphan row.
+  try {
+    await c.env.CORPUS.put(key, bytes);
+  } catch (err) {
+    await c.env.DB.prepare("DELETE FROM attachments WHERE id = ?")
+      .bind(attId)
+      .run();
+    throw err;
+  }
   if (c.env.INGEST) {
     await c.env.INGEST.send({ doc_id: attId, lane: "attachment", kind: "attachment" });
   }
@@ -315,12 +375,13 @@ intake.post("/:id/rounds", async (c) => {
   const idOr = idOr404(c);
   if (typeof idOr !== "string") return idOr;
   const id = idOr;
-  const me = await c.env.DB.prepare(
-    "SELECT id, round, parent_id FROM submissions WHERE id = ?",
-  )
-    .bind(id)
-    .first<{ id: string; round: number; parent_id: string | null }>();
+  const parsed = RoundsBodySchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const me = await submissionByCode(c, id, parsed.data.access_code);
   if (!me) return c.json({ error: "not_found" }, 404);
+  if (me.status !== "open") {
+    return c.json({ error: "submission_closed" }, 409);
+  }
   // Rounds are bounded; on exhaustion the submission completes and the
   // pipeline retriggers on genuinely new ground (R4).
   if (me.round >= ROUNDS_MAX) {
@@ -335,7 +396,7 @@ intake.post("/:id/rounds", async (c) => {
     .bind(...family)
     .all<{ topic: string }>();
   const rows = Array.isArray(listed) ? listed : listed.results;
-  const covered = new Set(rows.map((r) => r.topic));
+  const covered = new Set(rows.map((r) => normaliseTopic(r.topic)));
 
   const client = await liveClient(c.env.DB, c.env);
   const result = await groundedQuestions(c.env.DB, client, covered, (t) =>

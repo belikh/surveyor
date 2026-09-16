@@ -20,7 +20,7 @@ function makeEnv() {
     OPERATOR_TOKEN: TOKEN,
     SERVER_SECRET: "server-secret-for-tests",
     ENCRYPTION_KEY: "e".padEnd(64, "0"),
-    P_KEY: "provider-key",
+    GROQ_API_KEY: "provider-key",
   };
 }
 
@@ -252,7 +252,7 @@ describe("journalist pass at publish", () => {
           {
             kind: "openai-compatible",
             label: "p",
-            secret_slot: "P_KEY",
+            secret_slot: "GROQ_API_KEY",
             model: "m",
             base_url: "https://llm.example/v1",
           },

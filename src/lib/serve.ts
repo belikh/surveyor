@@ -16,6 +16,7 @@ import {
   type CandidateAngle,
   type CorpusDoc,
 } from "./engine";
+import { isAllowedProviderBaseUrl } from "./net";
 
 export interface ModelClient {
   tier: string;
@@ -219,6 +220,10 @@ export function buildChainClient(
       const baseURL = baseFor(e);
       if (!baseURL) {
         lastError = `no base URL for ${e.label}`;
+        continue;
+      }
+      if (!isAllowedProviderBaseUrl(baseURL)) {
+        lastError = `disallowed base URL for ${e.label}`;
         continue;
       }
       const provider = createOpenAICompatible({

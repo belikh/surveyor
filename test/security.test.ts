@@ -48,13 +48,14 @@ async function solvedPow(env: Record<string, unknown>) {
 
 async function createSubmission(env: Record<string, unknown>) {
   const pow = await solvedPow(env);
-  return (await (
+  const created = (await (
     await callApp(env, "/api/intake", {
       method: "POST",
       headers: auth,
       body: JSON.stringify({ pow }),
     })
   ).json()) as { id: string; access_code: string };
+  return created;
 }
 
 const INJECTIONS = [
@@ -67,7 +68,7 @@ const INJECTIONS = [
 describe("injection suite", () => {
   it("rounds never follow, echo, or leak on adversarial input", async () => {
     const env = makeEnv();
-    const { id } = await createSubmission(env);
+    const { id, access_code } = await createSubmission(env);
     await callApp(env, `/api/intake/${id}/steps`, {
       method: "POST",
       headers: auth,
@@ -77,13 +78,14 @@ describe("injection suite", () => {
           value,
           topic: `evil${i}`,
         })),
+        access_code,
       }),
     });
     const r = (await (
       await callApp(env, `/api/intake/${id}/rounds`, {
         method: "POST",
         headers: auth,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ access_code }),
       })
     ).json()) as { questions: Array<{ topic: string; question: string }> };
     const text = JSON.stringify(r.questions);
@@ -105,7 +107,7 @@ describe("mirror scan + storage audit", () => {
   it("no known name appears in plaintext at rest", async () => {
     const env = makeEnv();
     const names = ["Zara Kline", "Maddie", "Trent Blackwood"];
-    const { id } = await createSubmission(env);
+    const { id, access_code } = await createSubmission(env);
     await callApp(env, `/api/intake/${id}/steps`, {
       method: "POST",
       headers: auth,
@@ -117,6 +119,7 @@ describe("mirror scan + storage audit", () => {
             topic: "roster",
           },
         ],
+        access_code,
       }),
     });
     await callApp(env, "/api/corpus", {
@@ -160,6 +163,33 @@ describe("mirror scan + storage audit", () => {
     expect(entities.length).toBeGreaterThanOrEqual(3);
     const labels = new Set(entities.map((e) => e.label));
     expect(labels.size).toBe(entities.length);
+  });
+
+  it("gates upper-case and mixed-case name shapes at the mirror", async () => {
+    const env = makeEnv();
+    for (const text of [
+      "SANDRA BELL approved the roster",
+      "Zara KLINE approved the roster",
+    ]) {
+      const res = await callApp(env, "/api/corpus", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          filename: "caps.txt",
+          content_type: "text/plain",
+          content_b64: b64(text),
+        }),
+      });
+      const body = (await res.json()) as { verdict: string };
+      expect(body.verdict, text).toBe("gated");
+    }
+    const db = env.DB as FakeD1;
+    const dump = JSON.stringify([
+      await db.prepare("SELECT * FROM corpus_docs").all(),
+      await db.prepare("SELECT * FROM corpus_fts").all(),
+    ]);
+    expect(dump).not.toContain("SANDRA BELL");
+    expect(dump).not.toContain("Zara KLINE");
   });
 });
 

@@ -59,7 +59,7 @@ function entryBody(over: Record<string, unknown> = {}) {
     label: "c",
     model: "m",
     base_url: "https://llm.example/v1",
-    secret_slot: "C_KEY",
+    secret_slot: "GROQ_API_KEY",
     api_key: "sk-live-secret-xyz",
     ...over,
   });
@@ -86,14 +86,14 @@ describe("BYOK key entry (R2)", () => {
       body: entryBody(),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, slot: "C_KEY" });
+    expect(await res.json()).toEqual({ ok: true, slot: "GROQ_API_KEY" });
     expect(calls.validate).toBe(1);
     expect(calls.puts).toHaveLength(1);
-    expect(calls.puts[0]).toContain("C_KEY");
+    expect(calls.puts[0]).toContain("GROQ_API_KEY");
     expect(calls.puts[0]).toContain("sk-live-secret-xyz");
 
     const providers = await providersInState(env);
-    expect(providers.map((p) => p.secret_slot)).toEqual(["C_KEY"]);
+    expect(providers.map((p) => p.secret_slot)).toEqual(["GROQ_API_KEY"]);
     expect(providers[0].label).toBe("c");
     expect(providers[0].base_url).toBe("https://llm.example/v1");
   });
@@ -114,7 +114,7 @@ describe("BYOK key entry (R2)", () => {
     ]);
     expect(dump).not.toContain("sk-live-secret-xyz");
     expect(dump).not.toContain("cf-secret-token");
-    expect(dump).toContain("C_KEY");
+    expect(dump).toContain("GROQ_API_KEY");
   });
 
   it("rotates in place when the same slot is written again", async () => {
@@ -146,7 +146,7 @@ describe("BYOK key entry (R2)", () => {
       headers: auth,
       body: entryBody(),
     });
-    const res = await callApp(env, "/api/providers/key/C_KEY", {
+    const res = await callApp(env, "/api/providers/key/GROQ_API_KEY", {
       method: "DELETE",
       headers: auth,
       body: JSON.stringify({

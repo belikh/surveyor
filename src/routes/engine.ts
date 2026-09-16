@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { Bindings } from "../env";
 import { getState } from "../state";
 import { sealText } from "../lib/vault";
-import { judgeSignificance, flagSuspicious } from "../lib/engine";
+import { judgeSignificance, flagSuspicious, normaliseTopic } from "../lib/engine";
 import { judgeSignificanceLive } from "../lib/serve";
 import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
@@ -197,20 +197,24 @@ engine.post("/lines/:id/complete", async (c) => {
 });
 
 async function ledgerTopics(db: D1Database): Promise<Set<string>> {
-  // Settled ground, whole-string granularity on both sides: submission
-  // topics plus the topic sets each angle was proposed for.
+  // Settled ground: submission topics plus the topic sets each angle was
+  // proposed for, canonicalised so case/whitespace variants stay settled.
   const sub = await db.prepare("SELECT topic FROM topics").all<{
     topic: string;
   }>();
   const ang = await db.prepare("SELECT topics_json FROM angles").all<{
     topics_json: string;
   }>();
-  const settled = new Set<string>(unwrap(sub).map((r) => r.topic));
+  const settled = new Set<string>(
+    unwrap(sub).map((r) => normaliseTopic(r.topic)),
+  );
   for (const a of unwrap(ang)) {
     try {
       const ts = JSON.parse(a.topics_json) as unknown;
       if (Array.isArray(ts)) {
-        for (const t of ts) if (typeof t === "string") settled.add(t);
+        for (const t of ts) {
+          if (typeof t === "string") settled.add(normaliseTopic(t));
+        }
       }
     } catch {
       // Corrupt row: fail open on that row only, never on the ledger.

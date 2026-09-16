@@ -3,9 +3,9 @@
 // leave these stack frames (constitution II).
 
 import type { Bindings } from "../env";
-import { resolveChain } from "./registry";
+import { resolveChain, sanitiseStoredSetup } from "./registry";
 import { buildChainClient, type ModelClient } from "./serve";
-import { SetupStateSchema } from "./setup";
+import { SetupStateSchema, isProviderSlot } from "./setup";
 
 export async function currentProviders(db: D1Database) {
   const row = await db
@@ -13,13 +13,19 @@ export async function currentProviders(db: D1Database) {
     .first<{ state_json: string }>();
   if (!row) return [];
   try {
-    return SetupStateSchema.parse(JSON.parse(row.state_json)).providers;
+    const raw = sanitiseStoredSetup(JSON.parse(row.state_json));
+    return SetupStateSchema.parse(raw).providers;
   } catch {
     return [];
   }
 }
 
+/** Read a provider key from the environment. This is the single choke
+ *  point between configured entries and installation secrets: only the
+ *  provider key slots ever resolve, so naming OPERATOR_TOKEN (or any other
+ *  binding) as a secret_slot cannot turn config-write into a secret read. */
 export function secretValue(env: Bindings, slot: string): string | undefined {
+  if (!isProviderSlot(slot)) return undefined;
   const v = (env as unknown as Record<string, unknown>)[slot];
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }

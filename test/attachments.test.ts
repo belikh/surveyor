@@ -51,20 +51,21 @@ async function createSubmission(env: Record<string, unknown>) {
       headers: auth,
       body: JSON.stringify({ pow: { challenge: ch.challenge, nonce: String(nonce) } }),
     })
-  ).json()) as { id: string };
-  return created.id;
+  ).json()) as { id: string; access_code: string };
+  return { id: created.id, code: created.access_code };
 }
 
 async function upload(
   env: Record<string, unknown>,
   id: string,
+  code: string,
   body: string,
   filename = "scan.png",
   mediaType = "image/png",
 ) {
   return callApp(
     env,
-    `/api/intake/${id}/attachments?filename=${encodeURIComponent(filename)}&media_type=${encodeURIComponent(mediaType)}`,
+    `/api/intake/${id}/attachments?filename=${encodeURIComponent(filename)}&media_type=${encodeURIComponent(mediaType)}&access_code=${encodeURIComponent(code)}`,
     { method: "POST", headers: { "content-type": mediaType }, body },
   );
 }
@@ -76,8 +77,8 @@ afterEach(() => {
 describe("submitter attachments (R6, FR-045-050)", () => {
   it("streams raw bytes to private R2 and records the upload", async () => {
     const env = makeEnv();
-    const id = await createSubmission(env);
-    const res = await upload(env, id, "fake-image-bytes");
+    const { id, code } = await createSubmission(env);
+    const res = await upload(env, id, code, "fake-image-bytes");
     expect(res.status).toBe(201);
     const body = (await res.json()) as { id: string; status: string };
     expect(body.status).toBe("uploaded");
@@ -94,8 +95,8 @@ describe("submitter attachments (R6, FR-045-050)", () => {
 
   it("rejects unsupported types and quota-exceeding submissions", async () => {
     const env = makeEnv();
-    const id = await createSubmission(env);
-    const bad = await upload(env, id, "x", "payload.exe", "application/octet-stream");
+    const { id, code } = await createSubmission(env);
+    const bad = await upload(env, id, code, "x", "payload.exe", "application/octet-stream");
     expect(bad.status).toBe(422);
 
     // Pre-existing usage at the cap: the next upload is refused.
@@ -106,7 +107,7 @@ describe("submitter attachments (R6, FR-045-050)", () => {
       )
       .bind(id, await sealText(kit, "old.png"), ATTACH_TOTAL_BYTES, new Date().toISOString())
       .run();
-    const over = await upload(env, id, "tiny");
+    const over = await upload(env, id, code, "tiny");
     expect(over.status).toBe(413);
     expect(((await over.json()) as { error: string }).error).toBe("quota_exceeded");
   });
@@ -115,8 +116,8 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     const env = makeEnv({
       AI: { run: async () => ({ answer: "Zara Kline approved the roster" }) },
     });
-    const id = await createSubmission(env);
-    const up = await upload(env, id, "fake-scan");
+    const { id, code } = await createSubmission(env);
+    const up = await upload(env, id, code, "fake-scan");
     const attId = ((await up.json()) as { id: string }).id;
     const drained = (await (
       await callApp(env, `/api/intake/${id}/attachments/drain`, {
@@ -156,8 +157,8 @@ describe("submitter attachments (R6, FR-045-050)", () => {
         },
       },
     });
-    const id = await createSubmission(env);
-    const up = await upload(env, id, "fake-scan");
+    const { id, code } = await createSubmission(env);
+    const up = await upload(env, id, code, "fake-scan");
     const attId = ((await up.json()) as { id: string }).id;
     const first = await drainAttachmentById(env as never, attId);
     expect(first.status).toBe("held");
@@ -178,8 +179,57 @@ describe("submitter attachments (R6, FR-045-050)", () => {
 
   it("counts per-submission usage from the attachments table", async () => {
     const env = makeEnv();
-    const id = await createSubmission(env);
-    await upload(env, id, "12345");
+    const { id, code } = await createSubmission(env);
+    await upload(env, id, code, "12345");
     expect(await attachmentBytes(env.DB as never, id)).toBe(5);
+  });
+
+  it("refuses uploads without the submission's access code", async () => {
+    const env = makeEnv();
+    const { id } = await createSubmission(env);
+    const decoy = await createSubmission(env);
+    const missing = await callApp(
+      env,
+      `/api/intake/${id}/attachments?filename=x.png&media_type=image/png`,
+      { method: "POST", headers: { "content-type": "image/png" }, body: "x" },
+    );
+    expect(missing.status).toBe(404);
+    const foreign = await upload(env, id, decoy.code, "x");
+    expect(foreign.status).toBe(404);
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
+  it("refuses uploads to a closed submission", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    await (env.DB as FakeD1)
+      .prepare("UPDATE submissions SET status = 'complete' WHERE id = ?")
+      .bind(id)
+      .run();
+    const closed = await upload(env, id, code, "x");
+    expect(closed.status).toBe(409);
+  });
+
+  it("serialises concurrent uploads against the per-submission cap", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    const { kit } = await boot(env as never);
+    // Leave room for exactly two 5-byte uploads.
+    await (env.DB as FakeD1)
+      .prepare(
+        "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, reason, retry_after, created_at) VALUES ('old', ?, ?, 'image/png', ?, 'uploaded', 'k', NULL, NULL, ?)",
+      )
+      .bind(
+        id,
+        await sealText(kit, "old.png"),
+        ATTACH_TOTAL_BYTES - 10,
+        new Date().toISOString(),
+      )
+      .run();
+    const results = await Promise.all(
+      [1, 2, 3, 4].map(() => upload(env, id, code, "abcde")),
+    );
+    expect(results.filter((r) => r.status === 201)).toHaveLength(2);
+    expect(await attachmentBytes(env.DB as never, id)).toBe(ATTACH_TOTAL_BYTES);
   });
 });

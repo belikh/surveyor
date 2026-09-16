@@ -20,12 +20,20 @@ export const AnswerSchema = z.object({
   topic: z.string().min(1).max(64),
 });
 
+/** The source's identity: the access code minted at creation (XXXX-XXXX). */
+export const AccessCodeSchema = z.string().min(9).max(9);
+
 export const StepsBodySchema = z.object({
   answers: z.array(AnswerSchema).min(1).max(32),
+  access_code: AccessCodeSchema,
+});
+
+export const RoundsBodySchema = z.object({
+  access_code: AccessCodeSchema,
 });
 
 export const ResumeBodySchema = z.object({
-  access_code: z.string().min(9).max(9),
+  access_code: AccessCodeSchema,
 });
 
 export const AddendumBodySchema = z.object({
@@ -65,18 +73,65 @@ export function nextQuestions(
   return STATIC_QUESTIONS.filter((q) => !covered.has(q.topic)).slice(0, count);
 }
 
-const NAME_RUN = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/g;
-// Single-token names in name-bearing contexts: speech-verb objects
-// ("told Maddie"), possessives ("Maddie's roster"), vocatives and
-// introductions ("called Trent", "named Renee"). Days, months, and common
-// sentence-start words are excluded below.
-const SINGLE_NAME = /\b(?:told|asked|called|named|with|for|from|by|supervisor|manager)\s+([A-Z][a-z]{2,})\b|\b([A-Z][a-z]{2,})'s\b/g;
-const NOT_NAMES = new Set([
-  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-  "Sunday", "January", "February", "March", "April", "May", "June", "July",
-  "August", "September", "October", "November", "December",
-  "The", "This", "That", "They", "There", "What", "When", "My", "Our",
-]);
+// A name token: title case, ALL CAPS, or hyphen/apostrophe-bearing. Only
+// shapes that carry a capital letter qualify — with case folded, every word
+// pair in ordinary prose would look like a name and the mirror would be
+// scrubbed to nonsense.
+const NAME_WORD = "[A-Z][a-z]*(?:['’\\-][A-Za-z]+)+|[A-Z][a-z]+|[A-Z]{2,}";
+// Runs of name-shaped words are claimed together so "Sandra Bell" is one
+// identity, not two.
+const NAME_RUN = new RegExp(
+  `\\b(?:${NAME_WORD})(?:\\s+(?:${NAME_WORD}))+\\b`,
+  "g",
+);
+// Any standalone capitalised token is a name candidate. Enumerating the
+// words a name may follow only hides the ones the list happens not to have,
+// so unknown tokens fail closed: false positives cost a label, false
+// negatives cost a source.
+const NAME_TOKEN = new RegExp(`\\b(?:${NAME_WORD})\\b`, "g");
+
+// Ordinary sentence vocabulary that must survive the gate: a non-name
+// allow-list, not a context gate. No static list of sentence openers is
+// complete, which is why the default for unknown tokens is to label.
+const NOT_NAMES = new Set(
+  (
+    "Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday," +
+    "Mondays,Tuesdays,Wednesdays,Thursdays,Fridays,Saturdays,Sundays," +
+    "January,February,March,April,May,June,July,August,September,October,November,December," +
+    "the,this,that,these,those,they,their,them,then,than,there,what,when,where,which,who,whom,why,how," +
+    "my,our,your,his,her,its,we,you,he,she,it,us,me,him,anyone,someone,everyone,nobody," +
+    "but,and,or,if,so,as,at,by,for,from,in,into,of,on,onto,to,with,without," +
+    "also,however,therefore,because,since,until,while,during,after,before,between,above,below,under,over," +
+    "again,still,now,just,only,even,not,no,yes,all,any,some,each,every,other,others,most,many,few,both," +
+    "either,neither,such,same,very,too,well,sure,okay,ok," +
+    "is,are,was,were,be,been,being,has,have,had,do,does,did,can,could,will,would,shall,should,may,might,must," +
+    "get,got,go,goes,went,come,comes,came,say,says,said,tell,told,ask,asked,call,called,name,named,meet,met," +
+    "work,works,worked,make,makes,made,take,takes,took,give,gives,gave,see,saw,seen,know,knew,think,thought," +
+    "want,wanted,need,needed,use,used,find,found,keep,kept,let,put,set,run,ran,move,moved,turn,turned," +
+    "show,showed,start,started,stop,stopped,change,changed,report,reported,record,recorded,submit,submitted," +
+    "upload,uploaded,download,downloaded," +
+    "rosters,roster,hours,hour,pay,overtime,penalties,penalty,allowance,allowances,night,nights,shift,shifts," +
+    "day,days,week,weeks,month,months,year,years,time,times,morning,afternoon,evening,today,tomorrow,yesterday," +
+    "safety,management,manager,supervisors,supervisor,training,equipment,breaks,break,union,injury,injuries," +
+    "culture,staff,workers,worker,crew,crews,team,teams,site,company,workplace,job,jobs,survey,surveys," +
+    "report,reports,question,questions,answer,answers,submission,submissions,note,notes,field,evidence," +
+    "source,sources,interview,interviews,investigation,data,privacy,consent,meeting,meetings,memo,minutes," +
+    "document,documents,draft,version,records,record,policy,procedure,procedures,process,system,systems," +
+    "issue,issues,incident,incidents,claim,claims,finding,findings,exhibit,exhibits,entry,entries,log,logs," +
+    "email,emails,phone,message,messages,form,forms,list,lists," +
+    "transcribed,extracted,registry,detected,recognised,scanned," +
+    "pdf,ocr,csv,tsv,url,urls,api,whs,hr,it,ppe,sop,kpi,eba,abn,tfn,nsw,qld,vic,tas,sa,wa,act,nt,am,pm," +
+    "ceo,cfo,coo,md,gm,gp,rn,en,een,ain,hse,ohs,fifo,dido,eap,rdo,ado,toil,gis,qa,qc,id,ids," +
+    "australia,australian,sydney,melbourne,brisbane,perth,adelaide,canberra,darwin,hobart," +
+    "the,this,that,they,there,what,when,my,our"
+  )
+    .split(",")
+    .map((w) => w.toLowerCase()),
+);
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 export interface QuarantineHit {
   label: string;
@@ -84,28 +139,47 @@ export interface QuarantineHit {
 }
 
 /**
- * Deterministic quarantine extraction: multi-word capitalised runs become
- * stable per-submission pseudonyms (`[person A]`…); the text is scrubbed.
- * Conservative by design — false positives cost a label, false negatives
- * cost a source.
+ * Deterministic quarantine extraction: every capitalised token outside the
+ * non-name set becomes a stable per-submission pseudonym (`[person A]`…);
+ * the text is scrubbed. Conservative in intent, fail-closed in practice:
+ * false positives cost a label, false negatives cost a source.
  */
 export function quarantineText(
   text: string,
 ): { scrubbed: string; hits: QuarantineHit[] } {
   const names = new Map<string, string>();
+  const claims: Array<{ raw: string; label: string }> = [];
   const hits: QuarantineHit[] = [];
   const claim = (raw: string): string => {
-    if (NOT_NAMES.has(raw)) return raw;
+    if (NOT_NAMES.has(raw.toLowerCase())) return raw;
     let label = names.get(raw.toLowerCase());
     if (!label) {
       label = `[person ${String.fromCharCode(65 + names.size)}]`;
       names.set(raw.toLowerCase(), label);
+      claims.push({ raw, label });
       hits.push({ label, name: raw });
     }
     return label;
   };
-  const scrubbed = text
-    .replace(NAME_RUN, (m) => claim(m))
-    .replace(SINGLE_NAME, (m, a, b) => m.replace(a ?? b, claim(a ?? b)));
+  let scrubbed = text
+    .replace(NAME_RUN, (m) =>
+      m
+        .split(/\s+/)
+        .every((t) => NOT_NAMES.has(t.toLowerCase()))
+        ? m
+        : claim(m),
+    )
+    .replace(NAME_TOKEN, (m) => claim(m));
+  // Names already seen in this document keep matching case-insensitively,
+  // so a later lower-case mention is still scrubbed. Longest first so a
+  // token that is part of a claimed full name cannot consume it.
+  for (const { raw, label } of [...claims].sort(
+    (a, b) => b.raw.length - a.raw.length,
+  )) {
+    scrubbed = scrubbed.replace(
+      new RegExp(`\\b${escapeRegExp(raw)}\\b`, "gi"),
+      label,
+    );
+  }
   return { scrubbed, hits };
 }

@@ -110,4 +110,39 @@ describe("launch pack audit wiring", () => {
     const body = (await res.json()) as Record<string, string>;
     expect(body.error).toBe("pack_failed_audit");
   });
+
+  it("audits every supplied term, not just the first", async () => {
+    const env = makeEnv();
+    for (const query of [
+      "forbidden=no-tracking&forbidden=anonymous",
+      "forbidden=zzz&forbidden=anonymous&forbidden=yyy",
+      "forbidden=anonymous&forbidden=x",
+    ]) {
+      const res = await callApp(env, `/api/launch-pack?${query}`, {
+        headers: auth,
+      });
+      expect(res.status, query).toBe(500);
+      const body = (await res.json()) as Record<string, string>;
+      expect(body.error, query).toBe("pack_failed_audit");
+    }
+  });
+
+  it("rejects parameter spellings the audit cannot see", async () => {
+    const env = makeEnv();
+    for (const query of ["forbidden[]=anonymous", "forbidden[a]=anonymous"]) {
+      const res = await callApp(env, `/api/launch-pack?${query}`, {
+        headers: auth,
+      });
+      expect(res.status, query).toBe(422);
+      const body = (await res.json()) as Record<string, string>;
+      expect(body.error, query).toBe("invalid_terms");
+    }
+  });
+
+  it("still rejects an empty term list", async () => {
+    const res = await callApp(makeEnv(), "/api/launch-pack?forbidden=", {
+      headers: auth,
+    });
+    expect(res.status).toBe(422);
+  });
 });

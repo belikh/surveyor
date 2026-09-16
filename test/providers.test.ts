@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import app from "../src/index";
+import { hasSecretValue, secretValue } from "../src/lib/providers";
 import { FakeD1 } from "./helpers/d1";
 
 const TOKEN = "op-token";
@@ -60,13 +61,13 @@ describe("GET /api/providers", () => {
   });
 
   it("resolves the operator-ordered chain from present secrets", async () => {
-    const env = makeEnv({ B_KEY: "s3cr3t" });
+    const env = makeEnv({ TOKENROUTER_API_KEY: "s3cr3t" });
     await setupWithProviders(env, [
-      { kind: "groq", label: "g", secret_slot: "A_KEY", model: "m" },
+      { kind: "groq", label: "g", secret_slot: "GROQ_API_KEY", model: "m" },
       {
         kind: "openai-compatible",
         label: "c",
-        secret_slot: "B_KEY",
+        secret_slot: "TOKENROUTER_API_KEY",
         model: "m",
         base_url: "https://llm.example/v1",
       },
@@ -84,9 +85,9 @@ describe("GET /api/providers", () => {
   });
 
   it("never exposes secret values in the chain response", async () => {
-    const env = makeEnv({ B_KEY: "s3cr3t-value-xyz" });
+    const env = makeEnv({ TOKENROUTER_API_KEY: "s3cr3t-value-xyz" });
     await setupWithProviders(env, [
-      { kind: "groq", label: "g", secret_slot: "B_KEY", model: "m" },
+      { kind: "groq", label: "g", secret_slot: "TOKENROUTER_API_KEY", model: "m" },
     ]);
     const text = await (
       await callApp(env, "/api/providers", {
@@ -117,7 +118,7 @@ describe("save-time validation wired into POST /api/setup", () => {
       {
         kind: "openai-compatible",
         label: "c",
-        secret_slot: "C_KEY",
+        secret_slot: "GROQ_API_KEY",
         model: "m",
         base_url: "https://llm.example/v1",
         apiKey: "k",
@@ -146,7 +147,7 @@ describe("save-time validation wired into POST /api/setup", () => {
     ).json()) as Record<string, unknown>;
     const text = JSON.stringify(saved);
     expect(text).not.toContain('"apiKey"');
-    expect(text).toContain("C_KEY");
+    expect(text).toContain("GROQ_API_KEY");
   });
 
   it("422s loudly when the custom draft fails its test call", async () => {
@@ -172,6 +173,111 @@ describe("save-time validation wired into POST /api/setup", () => {
       await callApp(env, "/api/setup")
     ).json()) as Record<string, unknown>;
     expect(saved.phase).toBe("welcome");
+  });
+});
+
+describe("secret-slot choke point", () => {
+  const env = {
+    OPERATOR_TOKEN: "op",
+    SERVER_SECRET: "server",
+    ENCRYPTION_KEY: "enc",
+    CF_OAUTH_CLIENT_SECRET: "cf",
+    TURNSTILE_SECRET: "ts",
+    GROQ_API_KEY: "provider-key",
+  } as never;
+
+  it("never resolves an installation secret through secretValue", () => {
+    for (const slot of [
+      "OPERATOR_TOKEN",
+      "SERVER_SECRET",
+      "ENCRYPTION_KEY",
+      "CF_OAUTH_CLIENT_SECRET",
+      "TURNSTILE_SECRET",
+      "SOME_FUTURE_SECRET",
+    ]) {
+      expect(secretValue(env, slot)).toBeUndefined();
+      expect(hasSecretValue(env, slot)).toBe(false);
+    }
+    expect(secretValue(env, "GROQ_API_KEY")).toBe("provider-key");
+  });
+
+  it("422s a providers step that names an installation secret as the slot", async () => {
+    const res = await callApp(makeEnv(), "/api/setup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: JSON.stringify({
+        kind: "providers",
+        providers: [
+          {
+            kind: "groq",
+            label: "exfil",
+            secret_slot: "OPERATOR_TOKEN",
+            model: "m",
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("422s a providers step with a loopback base URL", async () => {
+    const res = await callApp(makeEnv(), "/api/setup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: JSON.stringify({
+        kind: "providers",
+        providers: [
+          {
+            kind: "openai-compatible",
+            label: "probe",
+            secret_slot: "GROQ_API_KEY",
+            model: "m",
+            base_url: "http://127.0.0.1:8101",
+          },
+        ],
+      }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("drops pre-existing hostile entries on boot", async () => {
+    const db = new FakeD1();
+    const first = { DB: db as never, OPERATOR_TOKEN: TOKEN };
+    await callApp(first, "/api/status"); // boot the schema
+    const stored = {
+      phase: "ready",
+      providers: [
+        { kind: "groq", label: "evil", secret_slot: "OPERATOR_TOKEN", model: "m" },
+        {
+          kind: "openai-compatible",
+          label: "internal",
+          secret_slot: "GROQ_API_KEY",
+          model: "m",
+          base_url: "http://169.254.169.254/v1",
+        },
+        { kind: "groq", label: "ok", secret_slot: "GROQ_API_KEY", model: "m" },
+      ],
+      instrument: { title: "t", blurb: "b", consent: "c" },
+      installed_at: "2026-01-01T00:00:00Z",
+    };
+    await db
+      .prepare("INSERT INTO setup_state (id, state_json) VALUES (1, ?)")
+      .bind(JSON.stringify(stored))
+      .run();
+    const second = { DB: db as never, OPERATOR_TOKEN: TOKEN, GROQ_API_KEY: "k" };
+    const chain = (await (
+      await callApp(second, "/api/providers", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })
+    ).json()) as { degraded: boolean; entries: Array<{ label: string }> };
+    expect(chain.degraded).toBe(false);
+    expect(chain.entries.map((e) => e.label)).toEqual(["ok"]);
   });
 });
 

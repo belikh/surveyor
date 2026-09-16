@@ -103,12 +103,24 @@ async function issuePack(
 }
 
 function forbiddenFrom(c: {
-  req: { query(key: string): string | string[] | undefined };
+  req: {
+    queries(key: string): string[] | undefined;
+    queries(): Record<string, string[]>;
+  };
 }): string[] | Response {
-  const raw = c.req.query("forbidden") ?? [];
-  const parsed = ForbiddenSchema.safeParse(
-    Array.isArray(raw) ? raw : [raw],
+  // Every occurrence of the parameter must reach the audit: reading only
+  // the first value silently drops the terms supplied after it.
+  const all = c.req.queries();
+  const odd = Object.keys(all).filter(
+    (k) => k !== "forbidden" && k.startsWith("forbidden"),
   );
+  // Parameter spellings the audit cannot see (forbidden[], forbidden[a])
+  // are rejected rather than ignored: a caller who believed they passed an
+  // exclusion list must not silently receive unaudited assets.
+  if (odd.length > 0) {
+    return Response.json({ error: "invalid_terms" }, { status: 422 });
+  }
+  const parsed = ForbiddenSchema.safeParse(c.req.queries("forbidden") ?? []);
   if (!parsed.success) {
     return Response.json({ error: "invalid_terms" }, { status: 422 });
   }

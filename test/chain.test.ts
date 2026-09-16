@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { buildChainClient, type ChainEntry } from "../src/lib/serve";
 
 const entries: ChainEntry[] = [
-  { kind: "openai-compatible", label: "first", secret_slot: "A_KEY", model: "m", base_url: "https://a.example/v1" },
-  { kind: "openai-compatible", label: "second", secret_slot: "B_KEY", model: "m", base_url: "https://b.example/v1" },
+  { kind: "openai-compatible", label: "first", secret_slot: "GROQ_API_KEY", model: "m", base_url: "https://a.example/v1" },
+  { kind: "openai-compatible", label: "second", secret_slot: "TOKENROUTER_API_KEY", model: "m", base_url: "https://b.example/v1" },
 ];
 
 function completion(text: string): Response {
@@ -21,7 +21,7 @@ function completion(text: string): Response {
   );
 }
 
-const secrets = { A_KEY: "ka", B_KEY: "kb" };
+const secrets = { GROQ_API_KEY: "ka", TOKENROUTER_API_KEY: "kb" };
 const read = (slot: string) => (secrets as Record<string, string>)[slot];
 
 describe("AI SDK provider chain", () => {
@@ -36,7 +36,7 @@ describe("AI SDK provider chain", () => {
 
   it("skips entries whose secret is absent", async () => {
     const calls: string[] = [];
-    const client = buildChainClient(entries, (slot) => (slot === "B_KEY" ? "kb" : undefined), async (url) => {
+    const client = buildChainClient(entries, (slot) => (slot === "TOKENROUTER_API_KEY" ? "kb" : undefined), async (url) => {
       calls.push(String(url));
       return completion("second!");
     });

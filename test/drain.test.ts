@@ -136,7 +136,7 @@ describe("drain routes", () => {
       OPERATOR_TOKEN: "op-token",
       SERVER_SECRET: "s",
       ENCRYPTION_KEY: "e".padEnd(64, "0"),
-      TEST_KEY: "k",
+      GROQ_API_KEY: "k",
     };
     const auth = {
       "content-type": "application/json",
@@ -154,7 +154,7 @@ describe("drain routes", () => {
           {
             kind: "openai-compatible",
             label: "vision-llm",
-            secret_slot: "TEST_KEY",
+            secret_slot: "GROQ_API_KEY",
             model: "m",
             base_url: "https://llm.example/v1",
             capabilities: ["vision"],
@@ -229,7 +229,7 @@ describe("keyless Workers AI lanes (R6)", () => {
       OPERATOR_TOKEN: "op-token",
       SERVER_SECRET: "s",
       ENCRYPTION_KEY: "e".padEnd(64, "0"),
-      TEST_KEY: "k",
+      GROQ_API_KEY: "k",
     };
     if (ai) env.AI = ai;
     const auth = {
@@ -312,7 +312,7 @@ describe("keyless Workers AI lanes (R6)", () => {
       {
         kind: "openai-compatible",
         label: "text-only",
-        secret_slot: "TEST_KEY",
+        secret_slot: "GROQ_API_KEY",
         model: "m",
         base_url: "https://llm.example/v1",
       },
@@ -343,7 +343,7 @@ describe("keyless Workers AI lanes (R6)", () => {
         {
           kind: "openai-compatible",
           label: "vision-llm",
-          secret_slot: "TEST_KEY",
+          secret_slot: "GROQ_API_KEY",
           model: "m",
           base_url: "https://llm.example/v1",
           capabilities: ["vision"],

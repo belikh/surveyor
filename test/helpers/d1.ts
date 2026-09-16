@@ -17,6 +17,10 @@ export class FakeD1 {
     // Compile lazily (like real D1), so a batch can contain DDL and a later
     // statement that depends on it (e.g. CREATE TABLE then CREATE INDEX).
     const compile = () => this.db.prepare(sql);
+    const d1Result = (r: { changes: number | bigint }) => ({
+      success: true,
+      meta: { changes: Number(r.changes) },
+    });
     const bound = (params: unknown[]) => ({
       sql,
       params,
@@ -24,14 +28,14 @@ export class FakeD1 {
       all: async <T>() => ({
         results: compile().all(...params.map(toSql)) as T[],
       }),
-      run: async () => compile().run(...params.map(toSql)),
+      run: async () => d1Result(compile().run(...params.map(toSql))),
     });
     return {
       sql,
       bind: (...params: unknown[]) => bound(params),
       first: async <T>() => compile().get() as T,
       all: async <T>() => compile().all() as T,
-      run: async () => compile().run(),
+      run: async () => d1Result(compile().run()),
     };
   }
   async run(sql: string, params: unknown[]) {

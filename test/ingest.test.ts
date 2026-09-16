@@ -57,4 +57,24 @@ describe("gateCorpusText", () => {
     expect(r.verdict).toBe("clean");
     expect(r.text).toContain("Rosters");
   });
+
+  it("gates ALL-CAPS, mixed-case and hyphenated name shapes", () => {
+    for (const text of [
+      "SANDRA BELL approved the roster",
+      "Zara KLINE approved the roster",
+      "Sandra-Bell approved the roster",
+      "Maddie said the roster was late",
+      "The manager told Quentin the roster was late",
+    ]) {
+      const r = gateCorpusText(text);
+      expect(r.verdict, text).toBe("gated");
+      expect(r.names.length, text).toBeGreaterThan(0);
+    }
+  });
+
+  it("scrubs a later lower-case mention of a name already seen", () => {
+    const r = gateCorpusText("Maddie approved it, then maddie left");
+    expect(r.verdict).toBe("gated");
+    expect(r.text).not.toMatch(/maddie/i);
+  });
 });

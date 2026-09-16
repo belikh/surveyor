@@ -107,7 +107,7 @@ function providersPanel(st) {
   const label = el("input", { placeholder: "Label" });
   const model = el("input", { placeholder: "Model id" });
   const baseUrl = el("input", { placeholder: "Base URL (openai-compatible only)" });
-  const slot = el("input", { placeholder: "Secret slot (e.g. OPENAI_KEY)" });
+  const slot = el("input", { placeholder: "Secret slot (GROQ_API_KEY or TOKENROUTER_API_KEY)" });
   const key = el("input", { type: "password", placeholder: "Provider API key" });
   const note = el("p", { class: "warn" }, "");
   const add = el("button", { class: "os9-btn" }, "Add provider key");

@@ -16,7 +16,7 @@ function makeEnv() {
     SERVER_SECRET: "server-secret-for-tests",
     ENCRYPTION_KEY: "e".padEnd(64, "0"),
     POW_DIFFICULTY: "8",
-    P_KEY: "provider-key",
+    GROQ_API_KEY: "provider-key",
   };
 }
 
@@ -42,8 +42,8 @@ async function createSubmission(env: Record<string, unknown>) {
       headers: auth,
       body: JSON.stringify({ pow: { challenge: ch.challenge, nonce: String(nonce) } }),
     })
-  ).json()) as { id: string };
-  return created.id;
+  ).json()) as { id: string; access_code: string };
+  return { id: created.id, code: created.access_code };
 }
 
 async function configureProvider(env: Record<string, unknown>) {
@@ -56,7 +56,7 @@ async function configureProvider(env: Record<string, unknown>) {
         {
           kind: "openai-compatible",
           label: "p",
-          secret_slot: "P_KEY",
+          secret_slot: "GROQ_API_KEY",
           model: "m",
           base_url: "https://llm.example/v1",
         },
@@ -106,11 +106,11 @@ describe("corpus-grounded rounds (R4)", () => {
     const env = makeEnv();
     await configureProvider(env);
     await seedCorpus(env, "Rosters are posted late on Tuesdays; pay is opaque.");
-    const id = await createSubmission(env);
+    const { id, code } = await createSubmission(env);
     await callApp(env, `/api/intake/${id}/steps`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ answers: [{ q: "roster", value: "late rosters", topic: "roster" }] }),
+      body: JSON.stringify({ answers: [{ q: "roster", value: "late rosters", topic: "roster" }], access_code: code }),
     });
     vi.stubGlobal("fetch", async () =>
       completion(
@@ -122,7 +122,7 @@ describe("corpus-grounded rounds (R4)", () => {
     const res = await callApp(env, `/api/intake/${id}/rounds`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({}),
+      body: JSON.stringify({ access_code: code }),
     });
     const body = (await res.json()) as {
       questions: Array<{ topic: string; question: string }>;
@@ -132,16 +132,16 @@ describe("corpus-grounded rounds (R4)", () => {
 
   it("falls back to the static pool with no provider", async () => {
     const env = makeEnv();
-    const id = await createSubmission(env);
+    const { id, code } = await createSubmission(env);
     await callApp(env, `/api/intake/${id}/steps`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ answers: [{ q: "roster", value: "x", topic: "roster" }] }),
+      body: JSON.stringify({ answers: [{ q: "roster", value: "x", topic: "roster" }], access_code: code }),
     });
     const res = await callApp(env, `/api/intake/${id}/rounds`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({}),
+      body: JSON.stringify({ access_code: code }),
     });
     const body = (await res.json()) as { questions: Array<{ topic: string }> };
     expect(body.questions.length).toBeGreaterThan(0);
@@ -152,12 +152,12 @@ describe("corpus-grounded rounds (R4)", () => {
     const env = makeEnv();
     await configureProvider(env);
     await seedCorpus(env, "Rosters are posted late; pay is opaque.");
-    const id = await createSubmission(env);
+    const { id, code } = await createSubmission(env);
     // The source has already settled the roster topic.
     await callApp(env, `/api/intake/${id}/steps`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ answers: [{ q: "roster", value: "late rosters", topic: "roster" }] }),
+      body: JSON.stringify({ answers: [{ q: "roster", value: "late rosters", topic: "roster" }], access_code: code }),
     });
     // Provider insists on a topic the source has already covered.
     vi.stubGlobal("fetch", async () =>
@@ -170,7 +170,7 @@ describe("corpus-grounded rounds (R4)", () => {
     const res = await callApp(env, `/api/intake/${id}/rounds`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({}),
+      body: JSON.stringify({ access_code: code }),
     });
     const body = (await res.json()) as { questions: Array<{ topic: string }> };
     // Filtered out; static pool serves instead.
@@ -180,18 +180,18 @@ describe("corpus-grounded rounds (R4)", () => {
   it("completes after the round cap and retriggers on new topics", async () => {
     const env = makeEnv();
     await seedCorpus(env, "Penalty rates and pay bands are contentious.");
-    const id = await createSubmission(env);
+    const { id, code } = await createSubmission(env);
     await callApp(env, `/api/intake/${id}/steps`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ answers: [{ q: "pay", value: "pay is opaque", topic: "pay" }] }),
+      body: JSON.stringify({ answers: [{ q: "pay", value: "pay is opaque", topic: "pay" }], access_code: code }),
     });
     // Walk ROUNDS_MAX rounds; the next call must complete + retrigger.
     for (let i = 0; i < 3; i++) {
       const res = await callApp(env, `/api/intake/${id}/rounds`, {
         method: "POST",
         headers: auth,
-        body: JSON.stringify({}),
+        body: JSON.stringify({ access_code: code }),
       });
       const body = (await res.json()) as {
         questions: Array<{ topic: string }>;
@@ -202,14 +202,14 @@ describe("corpus-grounded rounds (R4)", () => {
         method: "POST",
         headers: auth,
         body: JSON.stringify({
-          answers: body.questions.map((q) => ({ q: q.topic, value: "more", topic: q.topic })),
+          answers: body.questions.map((q) => ({ q: q.topic, value: "more", topic: q.topic })), access_code: code,
         }),
       });
     }
     const done = await callApp(env, `/api/intake/${id}/rounds`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({}),
+      body: JSON.stringify({ access_code: code }),
     });
     const body = (await done.json()) as {
       done?: boolean;

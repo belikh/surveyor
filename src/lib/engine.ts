@@ -100,6 +100,15 @@ export function rankAngles(angles: CandidateAngle[]): CandidateAngle[] {
 }
 
 /**
+ * Canonical topic form for the settled-ground ledger: trim, collapse
+ * whitespace, lower-case. Both the candidates and every ledger member are
+ * normalised so case/whitespace variants cannot re-open settled ground.
+ */
+export function normaliseTopic(t: string): string {
+  return t.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/**
  * Significance judge (deterministic floor): which candidate topics are
  * genuinely new against the ledger set. The LLM judge at serving time may
  * only narrow this set further, never widen it — settled ground never
@@ -109,19 +118,37 @@ export function judgeSignificance(
   candidates: string[],
   ledger: Set<string>,
 ): string[] {
-  return candidates.filter((t) => !ledger.has(t));
+  const settled = new Set([...ledger].map(normaliseTopic));
+  return candidates.filter((t) => !settled.has(normaliseTopic(t)));
 }
 
-const INJECTION_MARKERS = [
-  "ignore previous instructions",
-  "ignore all instructions",
-  "system prompt",
-  "jailbreak",
-  "[system]",
+// Injection phrasing, matched on normalised text so re-spacing, hyphenation,
+// newlines, zero-width characters and punctuation cannot slip a marker past
+// the gate. Literal matching stays best-effort by design: a hit holds the
+// line for human review, it is not a proof of intent.
+const INJECTION_PATTERNS: RegExp[] = [
+  /\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier)?\s*instructions?\b/,
+  /\bdisregard\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above|earlier)?\s*instructions?\b/,
+  /\b(?:system|developer)\s+prompt\b/,
+  /\bjailbreak\b/,
+  /\[\s*system\s*\]/,
 ];
 
+/** Lower-case and collapse separators so spacing/punctuation variants match
+ *  the same pattern. Brackets survive for the `[system]` form. */
+function normaliseForMatching(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[\u200b-\u200f\u2028-\u202f\ufeff]/g, " ")
+    .replace(/[^a-z0-9[\]]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
- * Suspicion flags for a claim: injection markers, or no exhibits at all.
+ * Suspicion flags for a claim and its citations: injection markers, or no
+ * exhibits at all. Snippets are scanned too — they render verbatim into
+ * published report bodies, so a marker riding in one must hold the line.
  * Flagged lines are held from every downstream surface pending review.
  */
 export function flagSuspicious(
@@ -129,14 +156,17 @@ export function flagSuspicious(
   exhibits: Exhibit[],
 ): string[] {
   const flags: string[] = [];
-  const lower = claim.toLowerCase();
-  for (const m of INJECTION_MARKERS) {
-    if (lower.includes(m)) {
-      flags.push(`injection-marker:${m}`);
+  for (const text of [claim, ...exhibits.map((e) => e.snippet)]) {
+    const normalised = normaliseForMatching(text);
+    for (const pattern of INJECTION_PATTERNS) {
+      const match = normalised.match(pattern);
+      if (match) {
+        flags.push(`injection-marker:${match[0]}`);
+      }
     }
   }
   if (exhibits.length === 0) {
     flags.push("ungrounded");
   }
-  return flags;
+  return [...new Set(flags)];
 }

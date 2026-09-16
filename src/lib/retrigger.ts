@@ -6,7 +6,7 @@
 
 import type { Bindings } from "../env";
 import { unwrap } from "./evidence";
-import { judgeSignificance } from "./engine";
+import { judgeSignificance, normaliseTopic } from "./engine";
 import { judgeSignificanceLive } from "./serve";
 import { recordTurn } from "./telemetry";
 import { liveClient } from "./providers";
@@ -39,7 +39,9 @@ export async function investigationLedger(
     try {
       const ts = JSON.parse(a.topics_json) as unknown;
       if (Array.isArray(ts)) {
-        for (const t of ts) if (typeof t === "string") settled.add(t);
+        for (const t of ts) {
+          if (typeof t === "string") settled.add(normaliseTopic(t));
+        }
       }
     } catch {
       // Corrupt row: fail open on that row only, never on the ledger.
@@ -49,7 +51,7 @@ export async function investigationLedger(
     .prepare("SELECT topic FROM topics WHERE submission_id != ?")
     .bind(excludeSubmissionId)
     .all<{ topic: string }>();
-  for (const r of unwrap(others)) settled.add(r.topic);
+  for (const r of unwrap(others)) settled.add(normaliseTopic(r.topic));
   return settled;
 }
 
