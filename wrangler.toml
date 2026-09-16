@@ -1,0 +1,64 @@
+# Cloudflare deployment surface: one investigation per installation.
+# Provisioned by the OAuth deploy button (or `wrangler deploy` with a
+# scoped token). Secrets are NEVER stored here — see RUNBOOK.md.
+
+name = "surveyor"
+main = "dist/worker.js"
+compatibility_date = "2026-09-01"
+
+# Relational state: submissions, corpus index, reports, receipts.
+[[d1_databases]]
+binding = "DB"
+database_name = "surveyor-db"
+database_id = "REPLACE_VIA_PROVISIONING"
+
+# Corpus object store: held-doc raw bytes live here until drained.
+[[r2_buckets]]
+binding = "CORPUS"
+bucket_name = "surveyor-corpus"
+
+# Async ingestion: uploads enqueue here, the consumer drains held lanes.
+[[queues.producers]]
+binding = "INGEST"
+queue = "surveyor-ingest"
+
+[[queues.consumers]]
+queue = "surveyor-ingest"
+max_batch_size = 5
+max_retries = 3
+
+# Staged journalism pipeline (angle → research line → report).
+[[workflows]]
+name = "surveyor-engine"
+binding = "ENGINE"
+class_name = "EngineWorkflow"
+
+# Keyless tier: Workers AI provides baseline OCR/LLM capability with no key.
+[ai]
+binding = "AI"
+
+# Scheduled report digests evaluate on the platform clock.
+[triggers]
+crons = ["0 6 * * *"]
+
+[vars]
+POW_DIFFICULTY = "16"
+# Public Turnstile sitekey (NOT a secret). Set this alongside the
+# TURNSTILE_SECRET to enable the invisible human-check; the survey shell
+# reads it from /api/status. Leave empty to keep the gate absent.
+TURNSTILE_SITEKEY = ""
+
+# Wizard OAuth consent (R2): public OAuth client id + endpoints. Leave the
+# client id empty to disable the flow. The client secret, when used, is a
+# secret (comment block below) and never reaches installation state.
+CF_OAUTH_CLIENT_ID = ""
+CF_OAUTH_AUTHORIZE_URL = ""
+CF_OAUTH_TOKEN_URL = ""
+CF_OAUTH_SCOPES = ""
+
+# Secrets (set by the operator's own hands, never in this file):
+#   SERVER_SECRET, ENCRYPTION_KEY, OPERATOR_TOKEN   (generated at provision)
+#   GROQ_API_KEY, TOKENROUTER_API_KEY               (optional BYOK)
+#   TURNSTILE_SECRET                                (optional human-check)
+#   CF_OAUTH_CLIENT_SECRET                          (optional OAuth client)
+#   PUBLIC_BASE_URL                                 (optional origin override)
