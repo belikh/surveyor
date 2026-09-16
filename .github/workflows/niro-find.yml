@@ -118,6 +118,21 @@ jobs:
           node-version: "24"
           cache: npm
 
+      # Copilot BYOK is all-or-nothing: the three provider variables are
+      # always set below, so a missing key would be a partial configuration
+      # that either fails mid-run or silently drops to native auth. Fail in
+      # seconds with the setup pointer. The value is never printed.
+      - name: Verify Copilot BYOK credentials
+        if: inputs.agent == 'copilot'
+        shell: bash
+        env:
+          COPILOT_PROVIDER_API_KEY: ${{ secrets.COPILOT_PROVIDER_API_KEY }}
+        run: |
+          if [ -z "${COPILOT_PROVIDER_API_KEY:-}" ]; then
+            echo "::error::COPILOT_PROVIDER_API_KEY is not set. Run scripts/setup-deepseek-niro.sh locally (or add the secret) before dispatching agent=copilot."
+            exit 1
+          fi
+
       # Niro v0.1.80's developer-agent MCP server only accepts Copilot CLI
       # sessions that announce the MCP clientInfo name `github-copilot` /
       # `github-copilot-developer`. @github/copilot 1.0.80 sends
