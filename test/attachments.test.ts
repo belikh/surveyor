@@ -384,15 +384,19 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     expect(await openText(kit, row.filename)).toBe("employé roster.png");
   });
 
-  it("refuses uploads to a closed submission", async () => {
+  it("accepts uploads to a completed submission (contact stays open)", async () => {
+    // The thank-you screen offers attachments after the rounds complete
+    // (C11); refusing them stranded every done-screen upload with a 409
+    // (A16 live trial). Rounds themselves stay closed; files share the
+    // follow-ups' budget and gates.
     const env = makeEnv();
     const { id, code } = await createSubmission(env);
     await (env.DB as FakeD1)
       .prepare("UPDATE submissions SET status = 'complete' WHERE id = ?")
       .bind(id)
       .run();
-    const closed = await upload(env, id, code, "x");
-    expect(closed.status).toBe(409);
+    const res = await upload(env, id, code, "x");
+    expect(res.status).toBe(201);
   });
 
   it("serialises concurrent uploads against the per-submission cap", async () => {

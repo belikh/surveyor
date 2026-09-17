@@ -371,7 +371,11 @@ intake.post("/:id/attachments", async (c) => {
   const code = c.req.header("x-access-code") ?? "";
   const sub = await submissionByCode(c, id, code);
   if (!sub) return c.json({ error: "not_found" }, 404);
-  if (sub.status !== "open") {
+  // Contact stays open after the rounds complete (C11): the thank-you
+  // screen offers attachments, and they share the follow-ups' budget and
+  // gates. Anything else is closed. (A16 live trial: the done screen's
+  // Attach button 409d on every completed submission before this.)
+  if (sub.status !== "open" && sub.status !== "complete") {
     return c.json({ error: "submission_closed" }, 409);
   }
   if (!c.env.CORPUS) return c.json({ error: "attachments_unavailable" }, 503);
