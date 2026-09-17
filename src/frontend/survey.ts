@@ -16,6 +16,8 @@ body { background: var(--bg); color: var(--ink); font-family: system-ui, -apple-
 .svy .code { font-family: monospace; font-size: 22px; letter-spacing: 2px; }
 .svy .warn { color: var(--muted); font-size: 13px; }
 .svy .q { margin: 14px 0; }
+.svy .thread { margin: 14px 0; }
+.svy .msg { border-left: 3px solid var(--line); margin: 8px 0; padding: 4px 10px; white-space: pre-wrap; }
 @media (prefers-color-scheme: dark) { :root { --bg: #141414; --ink: #efefef; --muted: #aaa; --line: #333; } .svy .consent { background: #1c1c1c; } }
 `;
 
@@ -163,6 +165,48 @@ async function resumeFlow(code, status) {
   });
   S.id = r.id;
   S.code = code;
+}
+// Reply thread (C11): read the conversation and send follow-ups through the
+// same access code — nothing new is stored on the device.
+async function threadMessages() {
+  const r = await api("/api/intake/" + S.id + "/thread", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ access_code: S.code }),
+  });
+  return r.messages || [];
+}
+async function threadScreen() {
+  const msgs = await threadMessages();
+  const box = el("div", { class: "thread" });
+  for (const m of msgs) {
+    box.append(el("p", { class: "msg", text: (m.role === "operator" ? "Investigator" : "You") + ": " + m.body }));
+  }
+  const input = el("textarea", { placeholder: "Write a follow-up" });
+  const send = el("button", { text: "Send follow-up" });
+  const next = el("button", { text: "Continue" });
+  const note = el("p", { class: "warn", text: "" });
+  app.replaceChildren(el("h1", { text: "Your conversation" }), box, input, send, next, note);
+  await new Promise((resolve) => {
+    next.onclick = resolve;
+    send.onclick = async () => {
+      const value = input.value.trim();
+      if (!value) { note.textContent = "Write something first."; return; }
+      send.disabled = true;
+      try {
+        await api("/api/intake/" + S.id + "/followup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ access_code: S.code, value }),
+        });
+        input.value = "";
+        note.textContent = "Sent. The investigator will see it when they next open your file.";
+      } catch (e) {
+        note.textContent = "Could not send: " + e.message;
+      }
+      send.disabled = false;
+    };
+  });
 }
 async function roundLoop() {
   for (;;) {
@@ -317,7 +361,7 @@ async function start() {
     catch (e) { status.textContent = "Something went wrong: " + e.message; goNew.disabled = false; goResume.disabled = false; }
   };
   goResume.onclick = async () => {
-    try { await resumeFlow(code.value.trim(), status); await roundLoop(); }
+    try { await resumeFlow(code.value.trim(), status); await threadScreen(); await roundLoop(); }
     catch (e) { status.textContent = "Resume failed — check the code."; }
   };
 }

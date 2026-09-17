@@ -11,21 +11,31 @@ import {
   accessCode,
   codeHmac,
   nameHmac,
+  openText,
   sealText,
   type VaultKit,
 } from "../lib/vault";
 import {
   AddendumBodySchema,
   CreateBodySchema,
+  FollowupBodySchema,
   QUESTIONS_PER_ROUND,
+  ReplyBodySchema,
   ResumeBodySchema,
   RoundsBodySchema,
   StepsBodySchema,
+  ThreadBodySchema,
   quarantineText,
   type QuarantineHit,
 } from "../lib/intake";
 import { groundedQuestions, ROUNDS_MAX } from "../lib/rounds";
 import { normaliseTopic } from "../lib/engine";
+import {
+  entityIndexRows,
+  entityIndexStatements,
+  type IndexedEntity,
+  type SealedEntityRef,
+} from "../lib/entities";
 import { completeAndRetrigger } from "../lib/retrigger";
 import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
@@ -220,32 +230,35 @@ intake.post("/:id/steps", async (c) => {
   ).bind(id).first<{ maxSeq: number | null }>();
   let seq = (existing?.maxSeq ?? -1) + 1;
   const batch: Array<{ sql: string; params?: unknown[] }> = [];
+  // Entity index rows: built from the gated (scrubbed) answer text the gate
+  // just produced, joined by HMAC — the raw name never enters the index.
+  const indexRows: IndexedEntity[] = [];
   for (const { topic, scrubbed, hits } of prepared) {
     const envelope = await sealText(app.kit, scrubbed);
     batch.push({
       sql: "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES (?, ?, 'submitter', 'structured', ?)",
       params: [id, seq++, envelope],
     });
+    const sealed: SealedEntityRef[] = [];
     for (const h of hits) {
+      const hmac = await nameHmac(app.kit, h.name);
       batch.push({
         sql: "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
-        params: [
-          id,
-          h.label,
-          await sealText(app.kit, h.name),
-          await nameHmac(app.kit, h.name),
-        ],
+        params: [id, h.label, await sealText(app.kit, h.name), hmac],
       });
+      sealed.push({ label: h.label, hmac });
     }
+    indexRows.push(...entityIndexRows(id, scrubbed, sealed));
     batch.push({
       sql: "INSERT INTO topics (submission_id, topic, source) VALUES (?, ?, 'baseline') ON CONFLICT(submission_id, topic) DO NOTHING",
       params: [id, normaliseTopic(topic)],
     });
   }
   // FakeD1.batch takes prepared statements; real D1 too — build them here.
-  await c.env.DB.batch(
-    batch.map((b) => c.env.DB.prepare(b.sql).bind(...(b.params ?? []))),
-  );
+  await c.env.DB.batch([
+    ...batch.map((b) => c.env.DB.prepare(b.sql).bind(...(b.params ?? []))),
+    ...entityIndexStatements(c.env.DB, indexRows),
+  ]);
   return c.json({ saved: parsed.data.answers.length });
 });
 
@@ -498,6 +511,134 @@ intake.post("/:id/rounds", async (c) => {
     .bind(id)
     .run();
   return c.json({ questions: result.questions });
+});
+
+// Reply thread (C11): one thread per submission. Operator replies and source
+// follow-ups are gated, sealed messages in the submission's own stream — the
+// access code is the only credential a source needs, so contact gains no new
+// identity surface. The submission status governs the round loop, not the
+// thread: contact stays open after a submission completes.
+
+/** Append one gated, sealed message to a submission's thread. Callers own
+ *  admission (access code, operator token, write budget). */
+async function appendMessage(
+  env: Bindings,
+  kit: VaultKit,
+  id: string,
+  role: "submitter" | "operator",
+  kind: "followup" | "reply",
+  raw: string,
+): Promise<void> {
+  const { scrubbed, hits } = quarantineText(raw);
+  const capped = hits.slice(0, MAX_HITS_PER_ANSWER);
+  const existing = await env.DB.prepare(
+    "SELECT MAX(seq) AS maxSeq FROM messages WHERE submission_id = ?",
+  ).bind(id).first<{ maxSeq: number | null }>();
+  const seq = (existing?.maxSeq ?? -1) + 1;
+  const batch: Array<{ sql: string; params?: unknown[] }> = [
+    {
+      sql: "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES (?, ?, ?, ?, ?)",
+      params: [id, seq, role, kind, await sealText(kit, scrubbed)],
+    },
+  ];
+  const sealed: SealedEntityRef[] = [];
+  for (const h of capped) {
+    const hmac = await nameHmac(kit, h.name);
+    batch.push({
+      sql: "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
+      params: [id, h.label, await sealText(kit, h.name), hmac],
+    });
+    sealed.push({ label: h.label, hmac });
+  }
+  await env.DB.batch([
+    ...batch.map((b) => env.DB.prepare(b.sql).bind(...(b.params ?? []))),
+    ...entityIndexStatements(env.DB, entityIndexRows(id, scrubbed, sealed)),
+  ]);
+}
+
+intake.post("/:id/thread", async (c) => {
+  const app = await getState(c.env);
+  const idOr = idOr404(c);
+  if (typeof idOr !== "string") return idOr;
+  const id = idOr;
+  const parsed = ThreadBodySchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const sub = await submissionByCode(c, id, parsed.data.access_code);
+  if (!sub) return c.json({ error: "not_found" }, 404);
+  const listed = await c.env.DB.prepare(
+    "SELECT seq, role, kind, body_envelope FROM messages WHERE submission_id = ? ORDER BY seq",
+  )
+    .bind(id)
+    .all<{ seq: number; role: string; kind: string; body_envelope: string }>();
+  const rows = Array.isArray(listed) ? listed : listed.results;
+  const messages = [];
+  for (const row of rows) {
+    messages.push({
+      seq: row.seq,
+      role: row.role,
+      kind: row.kind,
+      body: await openText(app.kit, row.body_envelope),
+    });
+  }
+  return c.json({ messages });
+});
+
+intake.post("/:id/followup", async (c) => {
+  const app = await getState(c.env);
+  const idOr = idOr404(c);
+  if (typeof idOr !== "string") return idOr;
+  const id = idOr;
+  const parsed = FollowupBodySchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const sub = await submissionByCode(c, id, parsed.data.access_code);
+  if (!sub) return c.json({ error: "not_found" }, 404);
+  const { hits } = quarantineText(parsed.data.value);
+  const newRows = 1 + Math.min(hits.length, MAX_HITS_PER_ANSWER);
+  // Reserve the write budget atomically, exactly as /steps does.
+  const reservation = await c.env.DB.prepare(
+    "UPDATE submissions SET write_count = write_count + ? WHERE id = ? AND write_count + ? <= ?",
+  )
+    .bind(newRows, id, newRows, WRITE_BUDGET_ROWS)
+    .run();
+  if (reservation.meta.changes === 0) {
+    return c.json(
+      {
+        error: "write_budget_exceeded",
+        detail: "per-submission write budget reached",
+      },
+      429,
+    );
+  }
+  await appendMessage(c.env, app.kit, id, "submitter", "followup", parsed.data.value);
+  return c.json({ saved: true });
+});
+
+intake.post("/:id/reply", async (c) => {
+  const denied = operatorDenied(c);
+  if (denied) {
+    return c.json(
+      { error: denied === 404 ? "not_found" : "unauthorised" },
+      denied,
+    );
+  }
+  const app = await getState(c.env);
+  const idOr = idOr404(c);
+  if (typeof idOr !== "string") return idOr;
+  const id = idOr;
+  const parsed = ReplyBodySchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const exists = await c.env.DB.prepare(
+    "SELECT id FROM submissions WHERE id = ?",
+  )
+    .bind(id)
+    .first<{ id: string }>();
+  if (!exists) return c.json({ error: "not_found" }, 404);
+  await appendMessage(c.env, app.kit, id, "operator", "reply", parsed.data.value);
+  return c.json({ saved: true });
 });
 
 export default intake;

@@ -5,7 +5,11 @@
 // (OCR/rescue) record an honest held status the engine (T5) drains. Hostile
 // input fails loud.
 
-import { canonicaliseText, quarantineText } from "./intake";
+import {
+  canonicaliseText,
+  quarantineText,
+  type QuarantineHit,
+} from "./intake";
 
 /** 25 MB per document: above this, fail closed, never truncate silently. */
 export const MAX_DOC_BYTES = 25 * 1024 * 1024;
@@ -76,6 +80,9 @@ export interface GatedText {
   text: string;
   verdict: GateVerdict;
   names: string[];
+  /** The pseudonyms the gate wrote into the text, paired with their names,
+   *  so the caller seals and indexes the marker the reader actually sees. */
+  hits: QuarantineHit[];
 }
 
 /**
@@ -87,12 +94,13 @@ export function gateCorpusText(raw: string): GatedText {
   const canonical = canonicaliseText(raw);
   const { scrubbed, hits } = quarantineText(canonical);
   if (hits.length === 0) {
-    return { text: canonical, verdict: "clean", names: [] };
+    return { text: canonical, verdict: "clean", names: [], hits: [] };
   }
   return {
     text: scrubbed,
     verdict: "gated",
     names: hits.map((h) => h.name),
+    hits,
   };
 }
 

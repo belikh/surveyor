@@ -1,9 +1,12 @@
-// Corpus model-pass drain: held-* lanes become gated mirror text.
-// Lane routing, gate-before-mirror, honest failure states. Text extraction
-// is delegated to a lane handler (the provider registry at runtime); this
-// module owns the state machine and the safety rules.
+// Corpus drain: held-* lanes become gated mirror text. Lane routing,
+// gate-before-mirror, honest failure states. Document lanes try the native
+// parser first (digital text) and fall back to the model pass only when
+// native parsing cannot read the file; this module owns the state machine
+// and the safety rules.
 
 import { gateCorpusText } from "./ingest";
+import type { QuarantineHit } from "./intake";
+import { extractNativeText } from "./native";
 import type { ModelClient } from "./serve";
 
 export interface HeldDoc {
@@ -56,6 +59,8 @@ export interface DrainOutcome {
   text: string;
   /** Quarantined names discovered during the gate (sealed by the caller). */
   names: string[];
+  /** Pseudonym markers in the gated text, paired with their names. */
+  hits: QuarantineHit[];
 }
 
 /**
@@ -72,6 +77,7 @@ export function applyDrain(doc: HeldDoc, result: LaneResult): DrainOutcome {
       reason: result.reason,
       text: "",
       names: [],
+      hits: [],
     };
   }
   if (result.text.trim().length === 0) {
@@ -82,6 +88,7 @@ export function applyDrain(doc: HeldDoc, result: LaneResult): DrainOutcome {
       reason: "extraction produced no text",
       text: "",
       names: [],
+      hits: [],
     };
   }
   const gated = gateCorpusText(result.text);
@@ -92,6 +99,7 @@ export function applyDrain(doc: HeldDoc, result: LaneResult): DrainOutcome {
     reason: null,
     text: gated.text,
     names: gated.names,
+    hits: gated.hits,
   };
 }
 
@@ -172,16 +180,29 @@ export async function runDrain(
 }
 
 /**
- * Lane handlers over the Workers AI binding (keyless document conversion and
- * vision OCR) with the operator's vision-tagged registry entries preferred
- * for OCR. Document bytes travel as Blobs or image data, never as base64
- * inside a text prompt. The caller gates and quarantines the output.
+ * Lane handlers over native parsers first, then the Workers AI binding
+ * (keyless document conversion and vision OCR) with the operator's
+ * vision-tagged registry entries preferred for OCR. Document bytes travel
+ * as Blobs or image data, never as base64 inside a text prompt. The caller
+ * gates and quarantines the output.
  */
 export function buildDrainHandlers(providers: DrainProviders): DrainHandler[] {
   const documentLane = (handler: DrainStep["handler"]): DrainHandler => ({
     handler,
     tier: providers.ai?.toMarkdown ? "workers-ai-toMarkdown" : "none",
     extract: async (doc: HeldDoc): Promise<LaneResult> => {
+      // Native parse first: digital text never needs the model pass.
+      const native = await extractNativeText(doc.lane, decodeB64(doc.bytes_b64));
+      if (native) {
+        return {
+          ok: true,
+          text: native.text,
+          tier: native.tier,
+          status: "parsed",
+        };
+      }
+      // The model pass is the fallback, used only when the native parser
+      // cannot read the file (scans, encrypted files, unsupported subsets).
       if (!providers.ai?.toMarkdown) {
         return {
           ok: false,

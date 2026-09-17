@@ -36,6 +36,20 @@ export const ResumeBodySchema = z.object({
   access_code: AccessCodeSchema,
 });
 
+/** Reply thread (C11): the code reads the thread, never a query string. */
+export const ThreadBodySchema = z.object({
+  access_code: AccessCodeSchema,
+});
+
+export const FollowupBodySchema = z.object({
+  access_code: AccessCodeSchema,
+  value: z.string().min(1).max(10_000),
+});
+
+export const ReplyBodySchema = z.object({
+  value: z.string().min(1).max(10_000),
+});
+
 export const AddendumBodySchema = z.object({
   pow: PowProofSchema,
   access_code: z.string().min(9).max(9),
@@ -132,6 +146,7 @@ const NOT_NAMES = new Set(
     "issue,issues,incident,incidents,claim,claims,finding,findings,exhibit,exhibits,entry,entries,log,logs," +
     "email,emails,phone,message,messages,form,forms,list,lists," +
     "transcribed,extracted,registry,detected,recognised,scanned," +
+    "sheet,sheets,slide,slides," +
     "pdf,ocr,csv,tsv,url,urls,api,whs,hr,it,ppe,sop,kpi,eba,abn,tfn,nsw,qld,vic,tas,sa,wa,act,nt,am,pm," +
     "ceo,cfo,coo,md,gm,gp,rn,en,een,ain,hse,ohs,fifo,dido,eap,rdo,ado,toil,gis,qa,qc,id,ids," +
     "australia,australian,sydney,melbourne,brisbane,perth,adelaide,canberra,darwin,hobart," +

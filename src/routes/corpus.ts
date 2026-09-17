@@ -9,6 +9,7 @@ import type { Bindings } from "../env";
 import { getState } from "../state";
 import { sealText, openText, nameHmac } from "../lib/vault";
 import { unwrap } from "../lib/evidence";
+import { entityIndexRows, entityIndexStatements } from "../lib/entities";
 import { recordTurn } from "../lib/telemetry";
 import {
   MAX_DOC_BYTES,
@@ -17,6 +18,7 @@ import {
   statusFor,
 } from "../lib/ingest";
 import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
+import type { QuarantineHit } from "../lib/intake";
 
 export const corpus = new Hono<{ Bindings: Bindings }>();
 
@@ -123,13 +125,23 @@ corpus.post("/", async (c) => {
 
   // Verdict honesty: unexamined (held) content is pending, never clean.
   // Filenames are operator-supplied but may carry names — seal them.
-  const gated = status === "held" ? { text: "", verdict: "pending" as const, names: [] as string[] } : gateCorpusText(raw);
+  const gated =
+    status === "held"
+      ? {
+          text: "",
+          verdict: "pending" as const,
+          names: [] as string[],
+          hits: [] as QuarantineHit[],
+        }
+      : gateCorpusText(raw);
   const now = new Date().toISOString();
   const sealedNames = await Promise.all(
-    gated.names.map(async (name, i) => ({
+    gated.hits.map(async (h, i) => ({
       label: `[corpus-name ${i + 1}]`,
-      envelope: await sealText(app.kit, name),
-      hmac: await nameHmac(app.kit, name),
+      envelope: await sealText(app.kit, h.name),
+      hmac: await nameHmac(app.kit, h.name),
+      // The index node is the pseudonym the gated text actually shows.
+      marker: h.label,
     })),
   );
   // Enqueue for the drain; absent binding (tests, local) is fine — the
@@ -137,6 +149,12 @@ corpus.post("/", async (c) => {
   if (stored && c.env.INGEST) {
     await c.env.INGEST.send({ doc_id: id, lane: decision.lane });
   }
+  // Entity index rows over the gated text, joined by HMAC — never names.
+  const indexRows = entityIndexRows(
+    `corpus:${id}`,
+    gated.text,
+    sealedNames.map((s) => ({ label: s.marker, hmac: s.hmac })),
+  );
   await c.env.DB.batch([
     c.env.DB.prepare(
       "INSERT INTO corpus_docs (id, filename, lane, status, verdict, text_envelope, raw_key, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -166,6 +184,7 @@ corpus.post("/", async (c) => {
         "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
       ).bind(`corpus:${id}`, s.label, s.envelope, s.hmac),
     ),
+    ...entityIndexStatements(c.env.DB, indexRows),
   ]);
   return c.json({
     id,
@@ -233,11 +252,17 @@ export async function drainDocById(
 
   if (["parsed", "OCRed", "rescued"].includes(r.outcome.status)) {
     const sealedNames = await Promise.all(
-      r.outcome.names.map(async (name, i) => ({
+      r.outcome.hits.map(async (h, i) => ({
         label: `[corpus-name ${i + 1}]`,
-        envelope: await sealText(app.kit, name),
-        hmac: await nameHmac(app.kit, name),
+        envelope: await sealText(app.kit, h.name),
+        hmac: await nameHmac(app.kit, h.name),
+        marker: h.label,
       })),
+    );
+    const indexRows = entityIndexRows(
+      `corpus:${row.id}`,
+      r.outcome.text,
+      sealedNames.map((s) => ({ label: s.marker, hmac: s.hmac })),
     );
     await env.DB.batch([
       env.DB.prepare(
@@ -256,6 +281,7 @@ export async function drainDocById(
           "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
         ).bind(`corpus:${row.id}`, sn.label, sn.envelope, sn.hmac),
       ),
+      ...entityIndexStatements(env.DB, indexRows),
     ]);
     if (env.CORPUS) await env.CORPUS.delete(row.raw_key);
   } else {
