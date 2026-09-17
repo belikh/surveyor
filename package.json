@@ -5,14 +5,15 @@
   "type": "module",
   "description": "Self-serve Cloudflare-native investigation platform: provisions and runs one anonymous-submission investigation per installation.",
   "scripts": {
-    "build": "npm run build:pdf && esbuild src/index.ts --bundle --format=esm --platform=browser --main-fields=module,main --loader:.sql=text --loader:.txt=text --outfile=dist/worker.js --target=es2022 && esbuild src/lib/smoke.ts --bundle --format=esm --platform=node --outfile=dist/smoke-lib.js --target=node20",
+    "build": "npm run build:pdf && npm run build:pdf-worker && esbuild src/index.ts --bundle --format=esm --platform=browser --main-fields=module,main --loader:.sql=text --loader:.txt=text --outfile=dist/worker.js --target=es2022 && esbuild src/lib/smoke.ts --bundle --format=esm --platform=node --outfile=dist/smoke-lib.js --target=node20",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
     "smoke:runtime": "bash scripts/runtime-smoke.sh",
     "build:pdf": "esbuild src/frontend/pdf-tools-entry.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=dist/pdf-tools.txt",
-    "pretest": "npm run build:pdf"
+    "build:pdf-worker": "esbuild node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs --bundle --format=iife --minify --platform=browser --target=es2022 --outfile=dist/pdf.worker.txt",
+    "pretest": "npm run build:pdf && npm run build:pdf-worker"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.49",

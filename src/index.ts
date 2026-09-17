@@ -12,6 +12,7 @@ import { wizardShell, WIZARD_JS } from "./frontend/chrome";
 import { surveyShell, SURVEY_JS } from "./frontend/survey";
 import { uploaderShell, UPLOADER_JS } from "./frontend/uploader";
 import PDF_TOOLS_JS from "../dist/pdf-tools.txt";
+import PDF_WORKER_JS from "../dist/pdf.worker.txt";
 import {
   resolveChain,
   validateCustomProvider,
@@ -161,6 +162,11 @@ app.get("/corpus.js", (c) =>
 );
 app.get("/pdf-tools.js", (c) =>
   c.body(PDF_TOOLS_JS, 200, { "content-type": "application/javascript" }),
+);
+// The PDF.js worker asset. `/pdf-tools.js` sets workerSrc to this route, so
+// the worker runs same-origin with no third-party fetch (ADR-0011).
+app.get("/pdf.worker.mjs", (c) =>
+  c.body(PDF_WORKER_JS, 200, { "content-type": "application/javascript" }),
 );
 
 app.route("/api/intake", intake);
