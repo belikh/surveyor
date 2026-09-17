@@ -83,7 +83,9 @@ async function main() {
         detail: `HTTP ${res.status}`,
       });
     }
-    const redirect = await get("/corpus");
+    // Redirect checks need `manual`: the default fetch follows the 301 and
+    // reports the final 200 with no location header.
+    const redirect = await fetch(`${base}/corpus`, { redirect: "manual" });
     add({
       name: "placement:corpus-redirect",
       status:
