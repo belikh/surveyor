@@ -107,7 +107,13 @@ async function step<T>(
   }
 }
 
-/** Idempotent resource creation: on "already exists", fetch the real id. */
+/** Idempotent resource creation: on "already exists", fetch the real id.
+ *  The live APIs share no single wording — Queues say "already taken", and
+ *  a bare 409 carries no message at all — so match all three. Proven
+ *  against a real account by the A16 trial, where a half-provisioned stack
+ *  (queue created by wrangler, worker deployed by hand) had to converge. */
+const ALREADY_EXISTS = /exists|already taken|duplicate|^http 409\b/i;
+
 async function createOrReuse(
   api: CloudflareApi,
   create: (name: string) => Promise<string>,
@@ -118,7 +124,7 @@ async function createOrReuse(
     return await create(name);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (/exists/i.test(msg)) {
+    if (ALREADY_EXISTS.test(msg)) {
       return await getId(name);
     }
     throw err;

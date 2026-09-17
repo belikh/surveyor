@@ -78,7 +78,9 @@ export function createCloudflareApi(ctx: CfApiContext): CloudflareApi {
     }
     const data = (await res.json().catch(() => ({}))) as CfEnvelope<T>;
     if (!res.ok || data.success === false) {
-      // Surface the API's own message so "already exists" stays detectable.
+      // Surface the API's own message so the reuse matcher in provision.ts
+      // can recognise every "already exists" wording the live APIs use
+      // ("already taken" for queues) — and the bare status for a 409.
       const detail = data.errors?.[0]?.message ?? `HTTP ${res.status}`;
       throw new Error(detail);
     }

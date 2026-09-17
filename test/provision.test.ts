@@ -130,6 +130,32 @@ describe("provisionStack", () => {
     expect(r2.d1.id).toBe(r1.d1.id);
   });
 
+  it("converges on the live Queues 'already taken' wording (A16)", async () => {
+    // The real API answers a taken queue name with "already taken", not
+    // "already exists" — observed live 2026-09-17. The provisioner must
+    // still converge through getQueueId rather than fail the run.
+    const api = fakeApi({
+      createQueue: async () => {
+        throw new Error(
+          "Queue name 'surveyor-ingest' is already taken. Please use a different name and try again.",
+        );
+      },
+    });
+    const receipt = await provisionStack(api, plan);
+    expect(receipt.queue.id).toBe("q-1");
+    expect(api.calls.map((c) => c.method)).toContain("getQueueId");
+  });
+
+  it("converges on a bare HTTP 409 from any create call", async () => {
+    const api = fakeApi({
+      createR2Bucket: async () => {
+        throw new Error("HTTP 409");
+      },
+    });
+    const receipt = await provisionStack(api, plan);
+    expect(receipt.r2.id).toBe("r2-1");
+  });
+
   it("reports an existing generated slot as set but not written (A2)", async () => {
     // A re-run finds the slot present: nothing is minted, nothing is
     // overwritten, and the receipt stays truthful about it.
