@@ -73,13 +73,19 @@ describe("operator auth (disabled-until-set)", () => {
 });
 
 describe("surveyor worker", () => {
-  it("serves the wizard shell with FR-13-style security headers", async () => {
+  it("serves the public survey at the root with FR-13-style security headers", async () => {
     const res = await fetch_(makeEnv(), "/");
     expect(res.status).toBe(200);
     expect(res.headers.get("content-security-policy")).toContain(
       "default-src 'none'",
     );
     expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(await res.text()).toContain("/survey.js");
+  });
+
+  it("serves the first-run wizard at /setup", async () => {
+    const res = await fetch_(makeEnv(), "/setup");
+    expect(res.status).toBe(200);
     expect(await res.text()).toContain("Surveyor");
   });
 

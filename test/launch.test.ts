@@ -91,7 +91,8 @@ describe("launch pack routes", () => {
     ).toBe(404);
     const live = await callApp(env, `/s/${newSlug}`);
     expect(live.status).toBe(200);
-    expect(await live.text()).toContain("anonymous survey");
+    // The short link serves the real survey shell, not a placeholder.
+    expect(await live.text()).toContain("/survey.js");
     // Rotated pack wording stays anonymity-first.
     expect(rotated.copy_short).toMatch(/no tracking/i);
     expect(rotated.copy_long).toContain(rotated.submissions_url);

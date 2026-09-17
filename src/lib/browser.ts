@@ -18,6 +18,28 @@ export interface RasterisedPage {
   signature: number[];
 }
 
+/** User-action primitives the console job drives real flows with (#67).
+ *  Selectors are driver-defined CSS selectors; the served console keeps
+ *  stable `data-action` / `data-field` hooks for them. Optional on
+ *  BrowserSession so the A6 PDF check's in-process seam stays valid: a
+ *  check that needs actions fails honestly when the driver has none. */
+export interface BrowserActions {
+  click(selector: string): Promise<void>;
+  fill(selector: string, value: string): Promise<void>;
+  /** Resolve when the element appears; reject on timeout. */
+  waitFor(selector: string, timeoutMs?: number): Promise<void>;
+  readText(selector: string): Promise<string>;
+  isDisabled(selector: string): Promise<boolean>;
+  setInputFiles(
+    selector: string,
+    files: Array<{ name: string; mimeType: string; bytes: Uint8Array }>,
+  ): Promise<void>;
+  /** Accept or dismiss the next native dialogs (confirm/alert). */
+  onDialog(handler: (kind: "confirm" | "alert", message: string) => boolean): void;
+  /** Optional failure artefact: a driver with a viewport returns a PNG. */
+  screenshot?(): Promise<Uint8Array>;
+}
+
 export interface BrowserSession {
   /** Load a same-origin path; `body` is the response body text. */
   goto(path: string): Promise<{ status: number; body: string }>;
@@ -25,6 +47,8 @@ export interface BrowserSession {
   extractText(pdf: Uint8Array): Promise<string>;
   rasterise(pdf: Uint8Array, maxPages?: number): Promise<RasterisedPage[]>;
   close(): Promise<void>;
+  /** Action primitives for console flows; absent on PDF-only drivers. */
+  actions?: BrowserActions;
 }
 
 export interface BrowserDriver {

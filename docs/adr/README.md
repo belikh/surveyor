@@ -88,3 +88,13 @@ the code still falls short of a decision, with the owning ticket.
   scheduled sweep (A3, #4), both upload paths stream without buffering the body
   (A14 #15, A15 #16), and the ciphertext audit covers every sealed column in the
   schema (A13, #14).
+- **0005 / 0008 / 0011 / 0013 / 0018 (#67)** — the operator console at
+  `/console` closes the recorded UI-path gaps: the runtime provisioner and
+  teardown now have a UI caller (ADR-0009's deviation), provider capability
+  tags are entered in the console's provider form, and OAuth consent returns
+  its fragment to the surface the flow started from (`/setup` or `/console`).
+  The public root is now the survey (the wizard moved to `/setup`, `/corpus`
+  redirects into the console). Remaining: the real-browser driver and CI job
+  for the console check wait on the reopened headless-browser seam (A6, #7)
+  and the deployed trial (A17, #18); the check's steps, receipts and
+  honest-failure modes are covered over the DOM-stub action seam meanwhile.

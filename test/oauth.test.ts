@@ -35,8 +35,11 @@ const configured = () =>
 
 /** Start the flow: the redirect carries state + challenge, and the verifier
  *  comes back in the HttpOnly cookie the callback will read. */
-async function startFlow(env: Record<string, unknown>) {
-  const res = await callApp(env, "/api/oauth/start");
+async function startFlow(env: Record<string, unknown>, next?: string) {
+  const res = await callApp(
+    env,
+    "/api/oauth/start" + (next ? "?next=" + encodeURIComponent(next) : ""),
+  );
   const location = new URL(res.headers.get("location") ?? "");
   const setCookie = res.headers.get("set-cookie") ?? "";
   const verifier =
@@ -136,7 +139,7 @@ describe("OAuth consent (R2)", () => {
       { headers: { cookie: flow.cookie } },
     );
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/#cf_token=at-123");
+    expect(res.headers.get("location")).toBe("/setup#cf_token=at-123");
     expect(sentBody).toContain("code=abc");
     expect(sentBody).toContain("client_id=client-123");
     expect(sentBody).toContain(`code_verifier=${flow.verifier}`);
@@ -169,6 +172,46 @@ describe("OAuth consent (R2)", () => {
     const text = await res.text();
     expect(text).toMatch(/HTTP 401/);
     expect(text).not.toContain("leaked-in-error");
+  });
+});
+
+describe("OAuth fragment surface (#67)", () => {
+  it("returns the token to the console when the flow started there", async () => {
+    const env = configured();
+    const flow = await startFlow(env, "/console");
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ access_token: "at-123" }), {
+          status: 200,
+        }),
+    );
+    const res = await callApp(
+      env,
+      `/api/oauth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+      { headers: { cookie: flow.cookie } },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/console#cf_token=at-123");
+  });
+
+  it("falls back to /setup for a surface outside the allowlist", async () => {
+    const env = configured();
+    const flow = await startFlow(env, "https://evil.example/steal");
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ access_token: "at-123" }), {
+          status: 200,
+        }),
+    );
+    const res = await callApp(
+      env,
+      `/api/oauth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+      { headers: { cookie: flow.cookie } },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/setup#cf_token=at-123");
   });
 });
 

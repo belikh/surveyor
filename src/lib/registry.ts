@@ -11,7 +11,12 @@ import {
   type SetupState,
 } from "./setup";
 
-export type UsableEntry = ProviderEntry;
+export type UsableEntry = ProviderEntry & {
+  /** Index in the stored provider list. Resolution filters secretless or
+   *  unservable entries out; reorder speaks stored order, so the console
+   *  needs the original index to move the entry it can see. */
+  order: number;
+};
 
 export type ProviderCapability =
   | "chat"
@@ -103,9 +108,9 @@ export function resolveChain(
   state: SetupState,
   hasSecret: (slot: string) => boolean,
 ): ChainResolution {
-  const entries = state.providers.filter(
-    (p) => isServableEntry(p) && hasSecret(p.secret_slot),
-  );
+  const entries = state.providers
+    .map((p, order) => ({ ...p, order }))
+    .filter((p) => isServableEntry(p) && hasSecret(p.secret_slot));
   if (entries.length === 0) {
     return {
       entries: [],

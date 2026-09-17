@@ -5,7 +5,7 @@ import {
   createPdfBrowserSeam,
   emptySeamCalls,
 } from "./helpers/pdf-browser";
-import { UPLOADER_JS } from "../src/frontend/uploader";
+import { CONSOLE_JS } from "../src/frontend/console";
 import { SURVEY_JS } from "../src/frontend/survey";
 
 function makeEnv() {
@@ -102,7 +102,7 @@ describe("hybrid PDF routing (F2)", () => {
     expect(rendered[0].blob.type).toBe("image/png");
   });
 
-  it("operator uploader routes mixed PDFs to text plus scanned pages and says so", () => {
+  it("console corpus section routes mixed PDFs to text plus scanned pages and says so", () => {
     for (const needle of [
       "analysePages",
       "rasterisePages",
@@ -110,7 +110,7 @@ describe("hybrid PDF routing (F2)", () => {
       "Sent text (",
       "scanned pages",
     ]) {
-      expect(UPLOADER_JS, needle).toContain(needle);
+      expect(CONSOLE_JS, needle).toContain(needle);
     }
   });
 

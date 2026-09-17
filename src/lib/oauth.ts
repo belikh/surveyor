@@ -25,9 +25,32 @@ export interface OAuthConfig {
 
 const STATE_TTL_MS = 10 * 60 * 1000;
 
-/** Signed, timestamped OAuth state (replay-bounded, no server storage). */
-export async function signState(kit: VaultKit, ts: number): Promise<string> {
-  return `${ts}.${await codeHmac(kit, `oauth:${ts}`)}`;
+/** The only surfaces an OAuth fragment may return to. The value rides in
+ *  the signed state and is checked against this allowlist on the way back:
+ *  a crafted `next` can never redirect the token elsewhere. */
+export const OAUTH_SURFACES = ["/setup", "/console"] as const;
+export type OAuthSurface = (typeof OAUTH_SURFACES)[number];
+
+export function normaliseSurface(next: string | undefined): OAuthSurface {
+  return next === "/console" ? "/console" : "/setup";
+}
+
+/** Signed, timestamped OAuth state carrying the surface to return to
+ *  (replay-bounded, no server storage). */
+export async function signState(
+  kit: VaultKit,
+  ts: number,
+  next: string = "/setup",
+): Promise<string> {
+  const surface = normaliseSurface(next);
+  const tag = surface.slice(1);
+  return `${ts}.${tag}.${await codeHmac(kit, `oauth:${ts}:${tag}`)}`;
+}
+
+/** The surface a verified state names. Call only after verifyState passes. */
+export function stateSurface(state: string): OAuthSurface {
+  const parts = state.split(".");
+  return parts.length === 3 ? normaliseSurface("/" + parts[1]) : "/setup";
 }
 
 export async function verifyState(
@@ -35,13 +58,14 @@ export async function verifyState(
   state: string,
   now: number,
 ): Promise<boolean> {
-  const dot = state.indexOf(".");
-  if (dot < 1) return false;
-  const tsText = state.slice(0, dot);
-  const sig = state.slice(dot + 1);
+  const parts = state.split(".");
+  if (parts.length !== 3) return false;
+  const tsText = parts[0];
+  const tag = parts[1];
+  const sig = parts[2];
   const ts = Number(tsText);
   if (!Number.isFinite(ts) || Math.abs(now - ts) > STATE_TTL_MS) return false;
-  const expected = await codeHmac(kit, `oauth:${tsText}`);
+  const expected = await codeHmac(kit, `oauth:${tsText}:${tag}`);
   if (sig.length !== expected.length) return false;
   let diff = 0;
   for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);

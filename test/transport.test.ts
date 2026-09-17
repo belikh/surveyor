@@ -45,14 +45,17 @@ describe("identifier transport audit (A11)", () => {
         reads.push(`${path.relative(root, file)}: req.${match[1]}(${match[2]})`);
       }
     }
-    // Two sanctioned call sites, both non-identifiers:
+    // Three sanctioned call sites, none an identifier transport:
     //  - the OAuth consent callback's protocol parameters `code`/`state`,
     //    which the provider's redirect defines and ADR-0013 pins (src/index.ts);
+    //  - the OAuth start's `next` surface selector, checked against the
+    //    /setup | /console allowlist and signed into the state (#67);
     //  - the launch pack's operator-supplied `forbidden` audit terms
     //    (src/routes/launch.ts), which are public-copy exclusions, not a
     //    source's access code, filename or record id.
     expect(reads.sort()).toEqual([
       'src/index.ts: req.query("code")',
+      'src/index.ts: req.query("next")',
       'src/index.ts: req.query("state")',
       'src/routes/launch.ts: req.queries("forbidden")',
       "src/routes/launch.ts: req.queries()",

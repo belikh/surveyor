@@ -66,6 +66,37 @@ async function main() {
     add({ name: "survey:shell", status: "fail", detail: String(err) });
   }
 
+  // 3b. Placement (#67): the root is the survey, /setup is the wizard, the
+  // console is served, and /corpus permanently redirects into it.
+  try {
+    const placements = [
+      { name: "placement:root-survey", path: "/", needle: "/survey.js" },
+      { name: "placement:setup-wizard", path: "/setup", needle: "/wizard.js" },
+      { name: "placement:console", path: "/console", needle: "/console.js" },
+    ];
+    for (const p of placements) {
+      const res = await get(p.path);
+      const html = await res.text();
+      add({
+        name: p.name,
+        status: res.ok && html.includes(p.needle) ? "pass" : "fail",
+        detail: `HTTP ${res.status}`,
+      });
+    }
+    const redirect = await get("/corpus");
+    add({
+      name: "placement:corpus-redirect",
+      status:
+        redirect.status === 301 &&
+        redirect.headers.get("location") === "/console#corpus"
+          ? "pass"
+          : "fail",
+      detail: `HTTP ${redirect.status} -> ${redirect.headers.get("location")}`,
+    });
+  } catch (err) {
+    add({ name: "placement:root-survey", status: "fail", detail: String(err) });
+  }
+
   // 4. Intake challenge + proof-of-work round trip.
   try {
     const ch = await (await get("/api/intake/challenge")).json();
@@ -107,6 +138,20 @@ async function main() {
         name: "operator:telemetry",
         status: tele.ok && Array.isArray(rows) ? "pass" : "fail",
         detail: `${Array.isArray(rows) ? rows.length : 0} turn(s) recorded`,
+      });
+      const reports = await get("/api/reports", auth);
+      const index = await reports.json();
+      add({
+        name: "operator:report-index",
+        status: reports.ok && Array.isArray(index.types) ? "pass" : "fail",
+        detail: `${Array.isArray(index.types) ? index.types.length : 0} report type(s)`,
+      });
+      const subs = await get("/api/submissions", auth);
+      const listed = await subs.json();
+      add({
+        name: "operator:submissions-list",
+        status: subs.ok && Array.isArray(listed.submissions) ? "pass" : "fail",
+        detail: `${Array.isArray(listed.submissions) ? listed.submissions.length : 0} submission(s)`,
       });
       const audit = await get("/api/audit/ciphertext", auth);
       const shape = await audit.json();

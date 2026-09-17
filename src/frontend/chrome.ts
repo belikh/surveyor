@@ -29,6 +29,33 @@ h1 { font-size: 16px; margin: 0 0 10px; }
 code { font-family: 'Monaco', 'Courier New', monospace; }
 `;
 
+// Shared console primitives (#67): the operator console reuses the platinum
+// chrome above and adds tabs, tables, fields and panels in the same idiom.
+export const CONSOLE_CSS = `
+body.console { display: block; min-height: 100vh; }
+.console .os9-body { max-width: 1080px; margin: 0 auto; padding: 14px 22px 64px; }
+.console .os9-titlebar { position: sticky; top: 0; z-index: 10; }
+.console .os9-nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0 4px; }
+.console .os9-tab { padding: 3px 12px; background: var(--platinum); border: 2px solid; border-color: var(--platinum-hi) var(--platinum-lo) var(--platinum-lo) var(--platinum-hi); text-decoration: none; color: var(--ink); font-weight: 700; }
+.console .os9-tab.current { background: var(--finder-blue); color: #fff; }
+.console .os9-tab:focus-visible, .console .os9-btn:focus-visible, .console input:focus-visible, .console select:focus-visible, .console textarea:focus-visible { outline: 2px solid var(--finder-blue); outline-offset: 1px; }
+.console h1 { margin-top: 18px; }
+.console h2 { font-size: 14px; margin: 14px 0 4px; }
+.console .os9-table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 13px; }
+.console .os9-table th, .console .os9-table td { border: 1px solid var(--platinum-lo); padding: 3px 6px; text-align: left; vertical-align: top; }
+.console .os9-table th { background: var(--platinum); }
+.console .os9-field { display: block; margin: 6px 0; }
+.console .os9-field > span { display: block; font-weight: 700; }
+.console .os9-field input, .console .os9-field select, .console .os9-field textarea { width: 100%; max-width: 480px; font: inherit; padding: 3px 5px; margin-top: 2px; box-sizing: border-box; }
+.console input[type=checkbox] { width: auto; }
+.console .os9-pre { white-space: pre-wrap; background: #fff; border: 1px solid var(--platinum-lo); padding: 8px; max-height: 320px; overflow: auto; font-family: 'Monaco', 'Courier New', monospace; font-size: 12px; }
+.console .os9-msg { border-left: 3px solid var(--platinum-lo); margin: 6px 0; padding: 3px 8px; white-space: pre-wrap; }
+.console .os9-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.console .os9-danger { color: var(--danger); }
+.console .os9-muted { color: var(--accent); }
+.console details > summary { cursor: pointer; font-weight: 700; margin: 6px 0; }
+`;
+
 export function wizardShell(title: string, lamp: "on" | "off"): string {
   void lamp;
   // No inline script: the title travels as a data attribute (escaped) so

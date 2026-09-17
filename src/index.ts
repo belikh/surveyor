@@ -10,7 +10,7 @@ import {
 } from "./lib/setup";
 import { wizardShell, WIZARD_JS } from "./frontend/chrome";
 import { surveyShell, SURVEY_JS } from "./frontend/survey";
-import { uploaderShell, UPLOADER_JS } from "./frontend/uploader";
+import { consoleShell, CONSOLE_JS } from "./frontend/console";
 import PDF_TOOLS_JS from "../dist/pdf-tools.txt";
 import PDF_WORKER_JS from "../dist/pdf.worker.txt";
 import {
@@ -34,6 +34,8 @@ import {
   generateCodeVerifier,
   signState,
   verifyState,
+  normaliseSurface,
+  stateSurface,
   type OAuthConfig,
 } from "./lib/oauth";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
@@ -69,6 +71,7 @@ import { sensitiveConsentPanel } from "./lib/consent";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
 import corpus from "./routes/corpus";
+import submissions from "./routes/submissions";
 import launch from "./routes/launch";
 import engine from "./routes/engine";
 import reports from "./routes/reports";
@@ -162,21 +165,28 @@ async function requireOperator(
 
 
 
-app.get("/", (c) => c.html(wizardShell("Surveyor — first-run setup", "off")));
+// First-run wizard: its own address so the installation root stays public
+// and the operator can always boot a fresh install.
+app.get("/setup", (c) => c.html(wizardShell("Surveyor — first-run setup", "off")));
 app.get("/wizard.js", (c) =>
   c.body(WIZARD_JS, 200, { "content-type": "application/javascript" }),
 );
 
 // Source-facing survey shell: consent copy from the installation
-// instrument (escaped at serve time), driver over /api/intake.
-app.get("/survey", async (c) => {
+// instrument (escaped at serve time), driver over /api/intake. The public
+// root and the launch-pack short link serve this same shell, so the address
+// a source was given opens the real instrument; /survey stays an alias.
+async function serveSurvey(c: {
+  env: Bindings;
+  html: (s: string) => Response | Promise<Response>;
+}): Promise<Response> {
   const s = await (await getState(c.env)).loadSetup();
   const instrument = s.instrument ?? {
     title: "Anonymous survey",
     blurb: "",
     consent: "",
   };
-  return c.html(
+  return await c.html(
     surveyShell(
       instrument.title,
       instrument.blurb,
@@ -184,19 +194,21 @@ app.get("/survey", async (c) => {
       sensitiveConsentPanel(s.instrument),
     ),
   );
-});
+}
+
+app.get("/", (c) => serveSurvey(c));
+app.get("/survey", (c) => serveSurvey(c));
 app.get("/survey.js", (c) =>
   c.body(SURVEY_JS, 200, { "content-type": "application/javascript" }),
 );
 
-// Operator corpus uploader: the self-hosted PDF.js tools run in the
-// operator's browser (digital text extraction or page rasterisation), so no
-// server-side PDF rasteriser is needed. No secrets are served here; the API
-// is operator-gated server-side.
-app.get("/corpus", (c) => c.html(uploaderShell()));
-app.get("/corpus.js", (c) =>
-  c.body(UPLOADER_JS, 200, { "content-type": "application/javascript" }),
+// Operator console: one browser shell for every day-2 capability; the
+// corpus uploader folds into its corpus section, so the old page redirects.
+app.get("/console", (c) => c.html(consoleShell()));
+app.get("/console.js", (c) =>
+  c.body(CONSOLE_JS, 200, { "content-type": "application/javascript" }),
 );
+app.get("/corpus", (c) => c.redirect("/console#corpus", 301));
 app.get("/pdf-tools.js", (c) =>
   c.body(PDF_TOOLS_JS, 200, { "content-type": "application/javascript" }),
 );
@@ -227,11 +239,12 @@ app.use("/api/engine/*", async (c, next) => {
 app.route("/api/engine", engine);
 
 // Report mutation (approve/publish/draft) is operator-only, as are the
-// legal gate's audit views (they name reviewers and reply subjects);
-// published reads stay public.
+// legal gate's audit views (they name reviewers and reply subjects) and the
+// report index (configs are operator data); published reads stay public.
 app.use("/api/reports/*", async (c, next) => {
   if (
     c.req.method !== "GET" ||
+    c.req.path === "/api/reports" ||
     c.req.path.endsWith("/draft") ||
     c.req.path.endsWith("/legal") ||
     c.req.path.endsWith("/reply")
@@ -242,6 +255,15 @@ app.use("/api/reports/*", async (c, next) => {
   await next();
 });
 app.route("/api/reports", reports);
+
+// Submission reads are operator-only: threads, structured answers, consent
+// decisions and attachment state all name one source's testimony.
+app.use("/api/submissions/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/submissions", submissions);
 
 // Case dossier: angles, lines, findings, report versions and the
 // operator's sealed notes for the one investigation. Findings and notes
@@ -328,13 +350,9 @@ app.get("/s/:slug", async (c) => {
   if (!row || row.slug !== parsed.data) {
     return c.json({ error: "not_found" }, 404);
   }
-  return c.html(
-    "<!DOCTYPE html><html lang=\"en-AU\"><head><meta charset=\"utf-8\">" +
-      "<title>Anonymous survey</title></head><body>" +
-      "<main><h1>An anonymous survey is open</h1>" +
-      "<p>No accounts, no tracking. Your words are encrypted before storage " +
-      "and identifying details are never kept.</p></main></body></html>",
-  );
+  // The short link is the survey's front door: serve the real instrument
+  // (QR codes and shared links land in it), not a placeholder.
+  return serveSurvey(c);
 });
 
 app.get("/api/setup", async (c) => {
@@ -691,8 +709,12 @@ app.get("/api/oauth/start", async (c) => {
   const clientId = c.env.CF_OAUTH_CLIENT_ID;
   if (!clientId) return c.json({ error: "oauth_not_configured" }, 404);
   const origin = new URL(c.req.url).origin;
+  // The surface the flow started from rides in the signed state so the
+  // token fragment comes back to the page that asked for it. The allowlist
+  // is enforced on the way in and again on the way out.
+  const next = normaliseSurface(c.req.query("next"));
   const verifier = generateCodeVerifier();
-  const state = await signState(app.kit, Date.now());
+  const state = await signState(app.kit, Date.now(), next);
   setCookie(c, OAUTH_VERIFIER_COOKIE, verifier, {
     httpOnly: true,
     secure: true,
@@ -727,8 +749,13 @@ app.get("/api/oauth/callback", async (c) => {
       code,
       verifier,
     );
-    // Fragment, not query: never sent to or logged by the server.
-    return c.redirect(`/#cf_token=${encodeURIComponent(token)}`, 302);
+    // Fragment, not query: never sent to or logged by the server. The
+    // surface comes from the verified state, so the token lands where the
+    // flow began (/setup or /console) and nowhere else.
+    return c.redirect(
+      `${stateSurface(state)}#cf_token=${encodeURIComponent(token)}`,
+      302,
+    );
   } catch (err) {
     return c.json(
       { error: "oauth_exchange_failed", detail: (err as Error).message },

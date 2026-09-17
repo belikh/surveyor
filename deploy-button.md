@@ -20,7 +20,7 @@ One-click install of one investigation into your own Cloudflare account.
    `https://deploy.workers.cloudflare.com/?url=<this-repo-url>`; the
    repository is public, so the URL can be minted for any mirror.
 2. Cloudflare provisions every resource above in your account.
-3. The install redirects to `/` — the first-run wizard.
+3. The install redirects to `/setup` — the first-run wizard.
 4. The wizard boots the installation: paste a Cloudflare API token with
    **Workers Scripts: Edit** (the token you deployed with, if you still have
    it) and choose an operator token. The panel sets the three master secrets

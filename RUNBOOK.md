@@ -63,7 +63,7 @@ an unnecessary rotation is what orphans sealed rows.
 
 ## 2. First-run setup
 
-Open the installation root. The wizard (Mac OS 9 styled) walks:
+Open `/setup`. The wizard (Mac OS 9 styled) walks:
 
 1. **Boot** — a fresh install has no key material, so nothing can be written
    until the three master secrets exist. The boot panel sets `SERVER_SECRET`,
@@ -93,9 +93,39 @@ Open the installation root. The wizard (Mac OS 9 styled) walks:
 Secrets are written straight to the Cloudflare secret store; they never
 pass through a model, a log, or this runbook.
 
-## 3. Corpus
+## 3. Operator console
 
-Upload documents through the operator API (`POST /api/corpus`). Text files
+Every day-2 action lives in the console at `/console`: paste the operator
+token once per browser session (memory only — no cookie, no storage, no URL
+entry), and the sections enable. The console covers the whole runbook:
+
+- **Home** — provisioning state, degraded warnings, deployed build commit,
+  and counts of outstanding work.
+- **Providers** — the provider chain, key entry, reorder, key deletion, and
+  the Cloudflare OAuth connection.
+- **Corpus** — upload and drain (the old `/corpus` page redirects here).
+- **Submissions** — source traffic, threads and structured answers as
+  quarantine pseudonyms, consent coverage, attachment lanes, and the
+  break-glass reveal with its audit trail.
+- **Engine** — propose and review angles (flagged angles are held), open
+  research lines, record spend, review, complete or retrigger, and inspect
+  the web snapshot behind a citation.
+- **Reports** — the five types with gate status, cadence configuration,
+  drafts, the legal and recording gates, and confirmed publication.
+- **Compliance** — retention windows and sweeps, breach assessment and the
+  OAIC statement, notices, the residency map and receipts, and the at-rest
+  ciphertext audit.
+- **Case file** — the dossier with operator notes and export.
+- **Launch** — the launch pack with deliberate rotation, telemetry, the
+  scheduler, provisioning, re-sealing after key rotation, and teardown.
+
+The API remains the same surface underneath; the console is a caller, not a
+second implementation.
+
+## 4. Corpus
+
+Upload documents through the console's Corpus section (or `POST
+/api/corpus` directly). Text files
 parse immediately; PDFs, office files, and images land in held lanes with
 their bytes in R2. `POST /api/corpus/drain` runs the model pass — with no
 capable provider configured, each file stays held with a reason naming the
@@ -107,16 +137,17 @@ window is 24 hours by default and configurable per category with `GET
 outside the bounds, or for a category that is retained as the investigation's
 record, is refused with a reason).
 
-## 4. Running the investigation
+## 5. Running the investigation
 
 - `POST /api/intake` creates a submission (proof-of-work; Turnstile when
-  configured). Sources use the public survey at `/survey`.
+  configured). Sources use the public survey at `/`; the launch-pack short
+  link `/s/<slug>` serves the same instrument, so QR codes land in it.
 - `POST /api/engine/angles/propose` queues grounded angles; approve them
   before research lines open (`spend_cap` is enforced).
 - `POST /api/reports/:type/approve` then `/publish`. Gated publishes only;
   append-only versioned history.
 
-## 5. Scheduled digests
+## 6. Scheduled digests
 
 The cron trigger (`0 6 * * *`) runs `scheduled()`: first the raw-byte
 retention sweep deletes attachment and held-corpus bytes whose configured
@@ -135,7 +166,7 @@ Every evaluation writes a receipt (`eval_receipts`) — audit them there.
 Full-dynamic is the risky mode: it re-renders on any new evidence and
 carries a review banner. Poisoned lines are held before any render.
 
-## 5b. Verifying an installation
+## 6b. Verifying an installation
 
 Against a live deployment:
 
@@ -171,7 +202,7 @@ queue delivery and retry, Workflow execution and persisted resume, and R2
 range and delete behaviour. Every receipt names what it exercised;
 failures name the primitive (`queue:*`, `workflow:*`, `r2:*`).
 
-## 5c. Residency and data flows
+## 6c. Residency and data flows
 
 The installation runs in your Cloudflare account, not in Australia:
 Cloudflare offers no Australian storage jurisdiction for D1 or R2 (European
@@ -194,13 +225,13 @@ process data overseas. The map updates as providers are added or removed.
 the APP 8 record. Provisioning records a receipt automatically, naming
 Cloudflare and any provider already configured at that point.
 
-## 6. Teardown
+## 7. Teardown
 
-The wizard's teardown screen resets local state and reports exactly what
-was wiped and what was not. Then delete the Cloudflare resources using the
-provisioning receipt: Worker, D1, R2 (empty it first), Queue, Workflow,
-secrets. Cloudflare account logs and analytics are outside our control and
-are listed as not-wiped.
+The console's Launch section (or the wizard at `/setup`) resets local state
+and reports exactly what was wiped and what was not. Then delete the
+Cloudflare resources using the provisioning receipt: Worker, D1, R2 (empty
+it first), Queue, Workflow, secrets. Cloudflare account logs and analytics
+are outside our control and are listed as not-wiped.
 
 ## Secrets reference
 

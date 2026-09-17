@@ -10,6 +10,8 @@ import { openText, sealText } from "../lib/vault";
 import {
   GateConfigSchema,
   RENDERERS,
+  REPORT_TYPES,
+  evaluateGates,
   type GateConfig,
 } from "../lib/reports";
 import { gatherEvidence } from "../lib/evidence";
@@ -48,6 +50,35 @@ function reportType(c: { req: { param(name: string): string }; json: (o: unknown
 function notFound(c: { json: (o: unknown, s: number) => Response }) {
   return c.json({ error: "not_found" }, 404);
 }
+
+// The report index (console): one screen for the five types — enabled
+// state, cadence, current version and the stored gate verdict. Operator
+// data until a version is published, so the mount gates it.
+reports.get("/", async (c) => {
+  await getState(c.env); // boot the schema for the evidence counts
+  const evidence = await gatherEvidence(c.env.DB);
+  const types = [];
+  for (const t of REPORT_TYPES) {
+    const row = await reportRow(c.env.DB, t);
+    const verdict = evaluateGates(row.config, evidence);
+    types.push({
+      type: t,
+      enabled: row.enabled,
+      status: row.status,
+      current_version: row.current_version,
+      pending_version: row.current_version + 1,
+      approved: row.config.approved,
+      approved_at: row.approved_at,
+      frequency: row.config.frequency,
+      cadence_ms: row.config.cadence_ms,
+      threshold_n: row.config.threshold_n,
+      manual_required: row.config.manual_required,
+      allow_uncited: row.config.allow_uncited,
+      gates: { ok: verdict.ok, unmet: verdict.unmet },
+    });
+  }
+  return c.json({ types });
+});
 
 reports.get("/:type", async (c) => {
   const app = await getState(c.env);

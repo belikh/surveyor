@@ -13,7 +13,8 @@ import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
 import { proposeAndStoreAngles } from "../lib/angles";
 import { finishLine } from "../lib/research";
-import { SnapshotError, snapshotPage } from "../lib/snapshot";
+import { SnapshotError, sha256Hex, snapshotPage } from "../lib/snapshot";
+import { openText } from "../lib/vault";
 
 export const engine = new Hono<{ Bindings: Bindings }>();
 
@@ -336,6 +337,33 @@ engine.post("/snapshots", async (c) => {
   }
 });
 
+// Research-line index (console): status, spend against cap and outcome
+// flags per line, with the angle it was opened from. Findings stay sealed
+// here — the line detail and the dossier are where they are read.
+engine.get("/lines", async (c) => {
+  const rows = await c.env.DB.prepare(
+    "SELECT r.id, r.angle_id, r.status, r.spend_cap, r.spend_used, r.citations_json, r.flags_json, r.created_at, a.title AS angle_title FROM research_lines r LEFT JOIN angles a ON a.id = r.angle_id ORDER BY r.created_at DESC, r.id DESC",
+  ).all<Record<string, string | number | null>>();
+  return c.json({
+    lines: unwrap(rows).map((r) => ({
+      id: String(r.id),
+      angle_id: String(r.angle_id),
+      angle_title: r.angle_title === null ? null : String(r.angle_title),
+      status: String(r.status),
+      spend_cap: Number(r.spend_cap),
+      spend_used: Number(r.spend_used),
+      created_at: String(r.created_at),
+      citation_count: z
+        .array(CitationSchema)
+        .parse(JSON.parse(String(r.citations_json ?? "[]"))).length,
+      flags: z
+        .array(z.string())
+        .parse(JSON.parse(String(r.flags_json ?? "[]"))),
+      provenance: "untrusted",
+    })),
+  });
+});
+
 engine.get("/lines/:id", async (c) => {
   const id = UuidParam.safeParse(c.req.param("id"));
   if (!id.success) return c.json({ error: "not_found" }, 404);
@@ -352,6 +380,52 @@ engine.get("/lines/:id", async (c) => {
   });
 });
 
+// Snapshot inspection (console): the operator reading a citation's evidence
+// target. The text is sealed at rest; this route opens it for the operator,
+// re-runs the stored digest as a tamper check, and carries the untrusted
+// provenance marker.
+engine.get("/snapshots/:id", async (c) => {
+  const app = await getState(c.env);
+  const id = UuidParam.safeParse(c.req.param("id"));
+  if (!id.success) return c.json({ error: "not_found" }, 404);
+  const row = await c.env.DB.prepare(
+    "SELECT id, requested_url, final_url, fetched_at, http_status, content_type, content_sha256, byte_length, extractor, extractor_version, r2_key, text_envelope, flags_json FROM web_snapshots WHERE id = ?",
+  ).bind(id.data).first<Record<string, string | number | null>>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  let text: string;
+  try {
+    text = await openText(app.kit, String(row.text_envelope));
+  } catch {
+    return c.json({ error: "not_readable" }, 409);
+  }
+  let flags: string[] = [];
+  try {
+    flags = z.array(z.string()).parse(JSON.parse(String(row.flags_json ?? "[]")));
+  } catch {
+    flags = [];
+  }
+  return c.json({
+    snapshot: {
+      id: row.id,
+      requested_url: row.requested_url,
+      final_url: row.final_url,
+      fetched_at: row.fetched_at,
+      http_status: row.http_status,
+      content_type: row.content_type,
+      content_sha256: row.content_sha256,
+      byte_length: row.byte_length,
+      extractor: row.extractor,
+      extractor_version: row.extractor_version,
+      r2_key: row.r2_key,
+      flags,
+      provenance: "untrusted",
+    },
+    text,
+    // The stored digest re-checked against the opened text: a mismatch is
+    // surfaced, never smoothed over.
+    verified: (await sha256Hex(text)) === row.content_sha256,
+  });
+});
 engine.post("/retrigger", async (c) => {
   const parsed = RetriggerSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);

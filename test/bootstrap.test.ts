@@ -153,8 +153,9 @@ describe("fresh-install bootstrap route (A1)", () => {
     expect(body.operator_token_set).toBe(false);
     expect(String(body.warning)).toMatch(/boot/i);
 
-    // The shell and its status surface are reachable while unprovisioned.
-    expect((await callApp(env, "/")).status).toBe(200);
+    // The first-run shell and its status surface are reachable while
+    // unprovisioned; the public root is the survey, which needs boot state.
+    expect((await callApp(env, "/setup")).status).toBe(200);
 
     const { puts, fetchImpl } = captureCfPuts();
     vi.stubGlobal("fetch", fetchImpl);
