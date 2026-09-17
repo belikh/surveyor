@@ -83,8 +83,8 @@
       "applies": [
         "native-docx"
       ],
-      "bytes": 834,
-      "sha256": "53b51eb3ea7a415e67491afcd8c4575ebc47d0966164edd06efaf6d73c3879e7"
+      "bytes": 1159,
+      "sha256": "5b738774d6d7e97e397cc56f6aa463a2779dae7afd691a8edcac2049e507a53c"
     },
     {
       "id": "docx-inline",
@@ -96,8 +96,8 @@
       "applies": [
         "native-docx"
       ],
-      "bytes": 258,
-      "sha256": "a50a5c5731c7326618c6b7d4c2dc909b7cb05ee2a86b6fc8199daf738d5f38c5"
+      "bytes": 323,
+      "sha256": "949c8a3d962a92733f25e8e9556b2aaebe0ba5e4e799ed48891a2c96fec87a73"
     },
     {
       "id": "xlsx-sheet",
@@ -109,8 +109,8 @@
       "applies": [
         "native-xlsx"
       ],
-      "bytes": 2245,
-      "sha256": "42a65c4b5cba74ea86d29cb5b157ed33fbdec925793f24144ec3f967c491335a"
+      "bytes": 2539,
+      "sha256": "6aa74b6c43df8a2017ddd66dffa5b852dac8ee69ff1aef221eeeadc7942d3aca"
     },
     {
       "id": "pptx-slides",
@@ -122,8 +122,8 @@
       "applies": [
         "native-pptx"
       ],
-      "bytes": 1173,
-      "sha256": "ed62a9039d096e87d7615911331b1bfc9a687f8b44bf92691b44da1fc30023ea"
+      "bytes": 1966,
+      "sha256": "a5c73332991c25cc6b61c6503a25e98ce9269ff7d9c59a8199b7433d5b286b41"
     }
   ],
   "paths": [
@@ -394,7 +394,7 @@
       "measured": false
     }
   ],
-  "run_at": "2026-09-17T05:37:43.335Z",
+  "run_at": "2026-09-17T08:50:46.006Z",
   "environment": {
     "node": "v24.19.0",
     "platform": "linux-x64"

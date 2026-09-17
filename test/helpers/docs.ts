@@ -4,6 +4,14 @@
 
 import { deflateRawSync } from "node:zlib";
 
+/** Deflate at level 0: stored blocks. Compressed output at any other level
+ *  depends on the zlib build, so fixture bytes — and the sha256 the
+ *  published evidence pins them by — would differ between machines. Level
+ *  0 keeps the deflate method flag and stream framing the parsers must
+ *  read while producing identical bytes on every zlib. */
+const deflateStored = (raw: Uint8Array): Buffer =>
+  deflateRawSync(raw, { level: 0 });
+
 const utf8 = new TextEncoder();
 const utf8Decoder = new TextDecoder("utf-8");
 
@@ -29,6 +37,11 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
   const u16 = (arr: number[], v: number) => arr.push(v & 0xff, (v >> 8) & 0xff);
   const u32 = (arr: number[], v: number) =>
     arr.push(v & 0xff, (v >> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff);
+  /** Append bytes without an argument spread: a stored (uncompressed) body
+   *  can exceed the engine's argument limit and blow the call stack. */
+  const append = (arr: number[], bytes: Uint8Array) => {
+    for (let i = 0; i < bytes.length; i++) arr.push(bytes[i]);
+  };
 
   const cursor = () => local.length;
 
@@ -36,7 +49,7 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
     const raw =
       typeof entry.data === "string" ? utf8.encode(entry.data) : entry.data;
     const deflated = entry.deflate === true;
-    const body = deflated ? new Uint8Array(deflateRawSync(raw)) : raw;
+    const body = deflated ? new Uint8Array(deflateStored(raw)) : raw;
     const nameBytes = utf8.encode(entry.name);
     const offset = cursor();
     offsets.push(offset);
@@ -52,7 +65,8 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
     u32(local, entry.declaredSize ?? raw.length);
     u16(local, nameBytes.length);
     u16(local, 0);
-    local.push(...nameBytes, ...body);
+    local.push(...nameBytes);
+    append(local, body);
   }
 
   const cdOffset = local.length;
@@ -61,7 +75,7 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
     const raw =
       typeof entry.data === "string" ? utf8.encode(entry.data) : entry.data;
     const deflated = entry.deflate === true;
-    const body = deflated ? new Uint8Array(deflateRawSync(raw)) : raw;
+    const body = deflated ? new Uint8Array(deflateStored(raw)) : raw;
     const nameBytes = utf8.encode(entry.name);
 
     u32(central, 0x02014b50);
@@ -94,7 +108,7 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
   u32(eocd, cdOffset);
   u16(eocd, 0);
 
-  return new Uint8Array([...local, ...central, ...eocd]);
+  return new Uint8Array(local.concat(central, eocd));
 }
 
 /* ---------------------------------- PDF --------------------------------- */
