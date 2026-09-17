@@ -119,3 +119,8 @@ export function codeHmac(kit: VaultKit, code: string): Promise<string> {
 export function nameHmac(kit: VaultKit, name: string): Promise<string> {
   return hmacHex(kit.nameKey, name.toLowerCase());
 }
+
+/** Queryable join key for a sensitive-category presence row. */
+export function categoryHmac(kit: VaultKit, category: string): Promise<string> {
+  return hmacHex(kit.nameKey, `sensitive:${category}`);
+}

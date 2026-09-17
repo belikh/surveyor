@@ -9,11 +9,21 @@ import { getState } from "../state";
 import { issueChallenge, verifyChallenge } from "../lib/pow";
 import {
   accessCode,
+  categoryHmac,
   codeHmac,
   nameHmac,
   sealText,
   type VaultKit,
 } from "../lib/vault";
+import {
+  SENSITIVE_CATEGORIES,
+  buildConsentRecord,
+  consentCoverage,
+  consentVersionOf,
+  inheritConsent,
+  latestConsentDecisions,
+  type SensitiveCategory,
+} from "../lib/consent";
 import {
   AddendumBodySchema,
   CreateBodySchema,
@@ -44,12 +54,15 @@ export const intake = new Hono<{ Bindings: Bindings }>();
  *  whole answer; only the entity rows a single answer can mint are bounded. */
 const MAX_HITS_PER_ANSWER = 32;
 
-/** Per-submission ceiling on appended rows (messages + entities), reserved
- *  atomically before the batch. Derived from the survey shape — the initial
- *  upload (≤32 answers × ≤3 names) plus every round (≤3×3) plus attachment
- *  testimony — with generous headroom, never from the request. */
+/** Per-submission ceiling on appended rows (messages + entities + category
+ *  presence), reserved atomically before the batch. Derived from the survey
+ *  shape — the initial upload (≤32 answers × ≤3 names × ≤9 categories) plus
+ *  every round (≤3×3) plus attachment testimony — with generous headroom,
+ *  never from the request. */
 const WRITE_BUDGET_ROWS =
-  32 * 4 + ROUNDS_MAX * QUESTIONS_PER_ROUND + 128;
+  32 * (4 + SENSITIVE_CATEGORIES.length) +
+  ROUNDS_MAX * QUESTIONS_PER_ROUND * (1 + SENSITIVE_CATEGORIES.length) +
+  128;
 
 /** Env is a boundary too: clamp difficulty into the sanctioned range. */
 function difficulty(env: Bindings): number {
@@ -161,11 +174,36 @@ intake.post("/", async (c) => {
   const hmac = await codeHmac(app.kit, code);
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  await c.env.DB.batch([
+  const statements = [
     c.env.DB.prepare(
       "INSERT INTO submissions (id, code_hmac, status, kind, parent_id, round, created_at) VALUES (?, ?, 'open', 'original', NULL, 0, ?)",
     ).bind(id, hmac, now),
-  ]);
+  ];
+  // Consent commits with the submission: a source who declines a category
+  // has that on record before any answer can be written.
+  if (parsed.data.consent) {
+    const setup = await app.loadSetup();
+    const record = await buildConsentRecord(
+      app.kit,
+      id,
+      parsed.data.consent,
+      consentVersionOf(setup.instrument),
+      setup.instrument?.consent ?? "",
+      now,
+    );
+    statements.push(
+      c.env.DB.prepare(
+        "INSERT INTO consent_records (id, submission_id, wording_version, record_envelope, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).bind(
+        record.id,
+        record.submission_id,
+        record.wording_version,
+        record.record_envelope,
+        record.created_at,
+      ),
+    );
+  }
+  await c.env.DB.batch(statements);
   return c.json({ id, access_code: code }, 201);
 });
 
@@ -182,71 +220,100 @@ intake.post("/:id/steps", async (c) => {
     return c.json({ error: "submission_closed" }, 409);
   }
 
+  // Granular consent first: an answer tagged with a category the source
+  // declined — or never decided — is refused, never stored (APP 3.3).
+  const decisions = await latestConsentDecisions(c.env.DB, app.kit, id);
+  const accepted: typeof parsed.data.answers = [];
+  const refused: Array<{ topic: string; categories: SensitiveCategory[] }> =
+    [];
+  for (const a of parsed.data.answers) {
+    const blocked = (a.sensitive_categories ?? []).filter(
+      (category) => decisions.get(category) !== true,
+    );
+    if (blocked.length > 0) {
+      refused.push({ topic: a.topic, categories: blocked });
+    } else {
+      accepted.push(a);
+    }
+  }
+
   // Prepare (scrub + cap) before the reservation so the budget is exact.
   const prepared: Array<{
     topic: string;
     scrubbed: string;
     hits: QuarantineHit[];
-  }> = parsed.data.answers.map((a) => {
+    categories: SensitiveCategory[];
+  }> = accepted.map((a) => {
     const { scrubbed, hits } = quarantineText(a.value);
     return {
       topic: a.topic,
       scrubbed,
       hits: hits.slice(0, MAX_HITS_PER_ANSWER),
+      categories: a.sensitive_categories ?? [],
     };
   });
   const newRows =
-    prepared.length + prepared.reduce((n, p) => n + p.hits.length, 0);
-  // Reserve the write budget atomically: a single guarded UPDATE means
-  // concurrent requests serialise on the submission row rather than all
-  // reading the same stale count.
-  const reservation = await c.env.DB.prepare(
-    "UPDATE submissions SET write_count = write_count + ? WHERE id = ? AND write_count + ? <= ?",
-  )
-    .bind(newRows, id, newRows, WRITE_BUDGET_ROWS)
-    .run();
-  if (reservation.meta.changes === 0) {
-    return c.json(
-      {
-        error: "write_budget_exceeded",
-        detail: "per-submission write budget reached",
-      },
-      429,
-    );
-  }
+    prepared.length +
+    prepared.reduce((n, p) => n + p.hits.length + p.categories.length, 0);
+  if (newRows > 0) {
+    // Reserve the write budget atomically: a single guarded UPDATE means
+    // concurrent requests serialise on the submission row rather than all
+    // reading the same stale count.
+    const reservation = await c.env.DB.prepare(
+      "UPDATE submissions SET write_count = write_count + ? WHERE id = ? AND write_count + ? <= ?",
+    )
+      .bind(newRows, id, newRows, WRITE_BUDGET_ROWS)
+      .run();
+    if (reservation.meta.changes === 0) {
+      return c.json(
+        {
+          error: "write_budget_exceeded",
+          detail: "per-submission write budget reached",
+        },
+        429,
+      );
+    }
 
-  const existing = await c.env.DB.prepare(
-    "SELECT MAX(seq) AS maxSeq FROM messages WHERE submission_id = ?",
-  ).bind(id).first<{ maxSeq: number | null }>();
-  let seq = (existing?.maxSeq ?? -1) + 1;
-  const batch: Array<{ sql: string; params?: unknown[] }> = [];
-  for (const { topic, scrubbed, hits } of prepared) {
-    const envelope = await sealText(app.kit, scrubbed);
-    batch.push({
-      sql: "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES (?, ?, 'submitter', 'structured', ?)",
-      params: [id, seq++, envelope],
-    });
-    for (const h of hits) {
+    const existing = await c.env.DB.prepare(
+      "SELECT MAX(seq) AS maxSeq FROM messages WHERE submission_id = ?",
+    ).bind(id).first<{ maxSeq: number | null }>();
+    let seq = (existing?.maxSeq ?? -1) + 1;
+    const batch: Array<{ sql: string; params?: unknown[] }> = [];
+    for (const { topic, scrubbed, hits, categories } of prepared) {
+      const messageSeq = seq++;
+      const envelope = await sealText(app.kit, scrubbed);
       batch.push({
-        sql: "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
-        params: [
-          id,
-          h.label,
-          await sealText(app.kit, h.name),
-          await nameHmac(app.kit, h.name),
-        ],
+        sql: "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES (?, ?, 'submitter', 'structured', ?)",
+        params: [id, messageSeq, envelope],
+      });
+      for (const category of categories) {
+        batch.push({
+          sql: "INSERT INTO message_categories (submission_id, seq, category_hmac) VALUES (?, ?, ?)",
+          params: [id, messageSeq, await categoryHmac(app.kit, category)],
+        });
+      }
+      for (const h of hits) {
+        batch.push({
+          sql: "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
+          params: [
+            id,
+            h.label,
+            await sealText(app.kit, h.name),
+            await nameHmac(app.kit, h.name),
+          ],
+        });
+      }
+      batch.push({
+        sql: "INSERT INTO topics (submission_id, topic, source) VALUES (?, ?, 'baseline') ON CONFLICT(submission_id, topic) DO NOTHING",
+        params: [id, normaliseTopic(topic)],
       });
     }
-    batch.push({
-      sql: "INSERT INTO topics (submission_id, topic, source) VALUES (?, ?, 'baseline') ON CONFLICT(submission_id, topic) DO NOTHING",
-      params: [id, normaliseTopic(topic)],
-    });
+    // FakeD1.batch takes prepared statements; real D1 too — build them here.
+    await c.env.DB.batch(
+      batch.map((b) => c.env.DB.prepare(b.sql).bind(...(b.params ?? []))),
+    );
   }
-  // FakeD1.batch takes prepared statements; real D1 too — build them here.
-  await c.env.DB.batch(
-    batch.map((b) => c.env.DB.prepare(b.sql).bind(...(b.params ?? []))),
-  );
-  return c.json({ saved: parsed.data.answers.length });
+  return c.json({ saved: prepared.length, refused });
 });
 
 /** Operator gate for the manual attachment drain (the queue is automatic). */
@@ -416,6 +483,9 @@ intake.post("/:id/addendum", async (c) => {
       "INSERT INTO submissions (id, code_hmac, status, kind, parent_id, round, created_at) VALUES (?, ?, 'open', 'addendum', ?, 0, ?)",
     ).bind(childId, hmac, id, new Date().toISOString()),
   ]);
+  // The addendum continues the same source under the same access code, so
+  // the consent decisions carry over to the child submission.
+  await inheritConsent(c.env.DB, id, childId);
   return c.json({ id: childId, access_code: parsed.data.access_code }, 201);
 });
 
@@ -463,6 +533,21 @@ intake.post("/:id/rounds", async (c) => {
     .bind(id)
     .run();
   return c.json({ questions: result.questions });
+});
+
+// Consent coverage (operator-only): per category, per wording version, and
+// every stored category without a grant behind it. The audit answer to
+// "was sensitive information collected lawfully?".
+intake.get("/consent/coverage", async (c) => {
+  const denied = operatorDenied(c);
+  if (denied) {
+    return c.json(
+      { error: denied === 404 ? "not_found" : "unauthorised" },
+      denied,
+    );
+  }
+  const app = await getState(c.env);
+  return c.json(await consentCoverage(c.env.DB, app.kit));
 });
 
 export default intake;

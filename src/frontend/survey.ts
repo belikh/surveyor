@@ -31,6 +31,7 @@ export function surveyShell(
   title: string,
   blurb: string,
   consent: string,
+  sensitive: string,
 ): string {
   // No inline script: consent/blurb travel as data attributes (escaped)
   // so the page honours script-src 'self'. JSON inside <script> would
@@ -39,7 +40,7 @@ export function surveyShell(
 <html lang="en-AU"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title><style>${SURVEY_CSS}</style></head>
-<body><main class="svy" id="app" data-title="${esc(title)}" data-blurb="${esc(blurb)}" data-consent="${esc(consent)}"></main>
+<body><main class="svy" id="app" data-title="${esc(title)}" data-blurb="${esc(blurb)}" data-consent="${esc(consent)}" data-sensitive="${esc(sensitive)}"></main>
 <script src="/survey.js"></script></body></html>`;
 }
 
@@ -95,7 +96,20 @@ async function solvePow(challenge, difficulty, onTick) {
     if (nonce % 500 === 0) { onTick(nonce); await new Promise((r) => setTimeout(r, 0)); }
   }
 }
-const S = { id: null, code: null, fresh: false, sitekey: null, tsPromise: null };
+const S = { id: null, code: null, fresh: false, sitekey: null, tsPromise: null, sensitive: { version: 1, categories: [] }, refusedNote: null };
+// The sensitive-category decisions in force for this page: one entry per
+// category in the panel, ticked or not. Sent with the create call.
+function consentDecisions() {
+  const out = [];
+  for (const cat of S.sensitive.categories) {
+    const box = document.getElementById("c-" + cat.key);
+    out.push({ category: cat.key, granted: !!(box && box.checked) });
+  }
+  return out;
+}
+function refusedNoteNode() {
+  return S.refusedNote ? el("p", { class: "warn", text: S.refusedNote }) : null;
+}
 // Invisible human-check: only wired when the installation exposes a
 // sitekey. The widget script is the sole third-party origin (constitution
 // VI) and the token is sent to our own /api/intake routes.
@@ -148,7 +162,11 @@ async function newSubmission(status) {
   const created = await api("/api/intake", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pow: { challenge: ch.challenge, nonce }, turnstile_token: turnstile }),
+    body: JSON.stringify({
+      pow: { challenge: ch.challenge, nonce },
+      turnstile_token: turnstile,
+      consent: consentDecisions(),
+    }),
   });
   S.id = created.id;
   S.code = created.access_code;
@@ -175,20 +193,41 @@ async function roundLoop() {
     const answers = [];
     const box = el("div", {});
     for (const q of r.questions) {
-      box.append(el("div", { class: "q" }, el("label", { text: q.question }), el("textarea", { id: "a-" + q.topic })));
+      const item = el("div", { class: "q" }, el("label", { text: q.question }), el("textarea", { id: "a-" + q.topic }));
+      if (S.sensitive.categories.length > 0) {
+        const details = el("details", {}, el("summary", { text: "Sensitive information in this answer" }));
+        for (const cat of S.sensitive.categories) {
+          details.append(el("label", { class: "warn" },
+            el("input", { type: "checkbox", id: "s-" + q.topic + "-" + cat.key }),
+            " " + cat.label + ": " + cat.prompt));
+        }
+        item.append(details);
+      }
+      box.append(item);
     }
     const btn = el("button", { text: "Continue" });
-    app.replaceChildren(box, btn);
+    const warn = refusedNoteNode();
+    app.replaceChildren(...(warn ? [warn] : []), box, btn);
     await new Promise((resolve) => { btn.onclick = resolve; });
     for (const q of r.questions) {
       const ta = document.getElementById("a-" + q.topic);
-      answers.push({ q: q.topic, value: ta.value, topic: q.topic });
+      const cats = [];
+      for (const cat of S.sensitive.categories) {
+        const cb = document.getElementById("s-" + q.topic + "-" + cat.key);
+        if (cb && cb.checked) cats.push(cat.key);
+      }
+      answers.push({ q: q.topic, value: ta.value, topic: q.topic, sensitive_categories: cats });
     }
-    await api("/api/intake/" + S.id + "/steps", {
+    const saved = await api("/api/intake/" + S.id + "/steps", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ answers, access_code: S.code }),
     });
+    if (saved && saved.refused && saved.refused.length > 0) {
+      S.refusedNote = "Not saved — consent was not given for: " + saved.refused.map((x) => x.topic).join(", ") + ". You can answer again without that information, or begin a new submission.";
+    } else {
+      S.refusedNote = null;
+    }
   }
 }
 // PDF tools are loaded lazily, only when a source attaches a PDF, so the
@@ -244,6 +283,8 @@ async function attachFile(f, note) {
 }
 function showDone() {
   const body = [el("h1", { text: "Thank you — your testimony is recorded." })];
+  const refused = refusedNoteNode();
+  if (refused) body.push(refused);
   if (S.fresh && S.code) {
     body.push(el("p", { text: "Your access code (shown once — write it down):" }));
     body.push(el("p", { class: "code", text: S.code }));
@@ -296,11 +337,25 @@ async function start() {
   const title = root.dataset.title || "Survey";
   const blurb = root.dataset.blurb || "";
   const consentCopy = root.dataset.consent || "";
+  try {
+    const parsed = JSON.parse(root.dataset.sensitive || "");
+    if (parsed && Array.isArray(parsed.categories)) S.sensitive = parsed;
+  } catch (e) {
+    S.sensitive = { version: 1, categories: [] };
+  }
   const statusInfo = await api("/api/status").catch(() => null);
   if (statusInfo && statusInfo.turnstile_sitekey) {
     S.sitekey = statusInfo.turnstile_sitekey;
   }
-  const consent = el("div", { class: "consent", text: consentCopy });
+  const consent = el("div", { class: "consent" }, el("p", { text: consentCopy }));
+  if (S.sensitive.categories.length > 0) {
+    consent.append(el("p", { class: "warn", text: "Sensitive information — consent wording version " + S.sensitive.version + ". Tick the kinds you agree to provide. Anything unticked is not collected: an answer telling us about it will not be saved." }));
+    for (const cat of S.sensitive.categories) {
+      consent.append(el("label", { class: "q" },
+        el("input", { type: "checkbox", id: "c-" + cat.key }),
+        " " + cat.label + ": I consent to my testimony including " + cat.prompt + "."));
+    }
+  }
   const status = el("p", { class: "warn", text: "" });
   const code = el("input", { type: "text", placeholder: "Access code (to resume)" });
   const goNew = el("button", { text: "Begin anonymously" });

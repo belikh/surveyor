@@ -41,6 +41,7 @@ import { createCloudflareApi } from "./lib/cfapi";
 import { liveClient, hasSecretValue } from "./lib/providers";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
+import { sensitiveConsentPanel } from "./lib/consent";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
 import corpus from "./routes/corpus";
@@ -136,7 +137,12 @@ app.get("/survey", async (c) => {
     consent: "",
   };
   return c.html(
-    surveyShell(instrument.title, instrument.blurb, instrument.consent),
+    surveyShell(
+      instrument.title,
+      instrument.blurb,
+      instrument.consent,
+      sensitiveConsentPanel(s.instrument),
+    ),
   );
 });
 app.get("/survey.js", (c) =>

@@ -186,3 +186,26 @@ CREATE TABLE IF NOT EXISTS notice_versions (
   created_at TEXT NOT NULL,
   UNIQUE (type, version)
 );
+
+-- Sensitive-category consent captures (APP 3.3). Decisions are sealed —
+-- which categories a source consented to is itself sensitive information —
+-- while the wording version stays plaintext so coverage can be grouped
+-- without opening records. Captures are append-only; the latest decision
+-- per category is the one in force.
+CREATE TABLE IF NOT EXISTS consent_records (
+  id TEXT PRIMARY KEY,
+  submission_id TEXT NOT NULL,
+  wording_version INTEGER NOT NULL,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_consent_records_submission ON consent_records(submission_id);
+
+-- Which sensitive categories a stored answer was tagged with. Joined by
+-- HMAC so no category name sits in plaintext next to sealed testimony.
+CREATE TABLE IF NOT EXISTS message_categories (
+  submission_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  category_hmac TEXT NOT NULL,
+  PRIMARY KEY (submission_id, seq, category_hmac)
+);
