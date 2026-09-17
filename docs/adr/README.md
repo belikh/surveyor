@@ -42,45 +42,45 @@ and the audio transcription options.
 The campaign build (#1) merged to `main` on 2026-09-17. This list records where
 the code still falls short of a decision, with the owning ticket.
 
-- **0002 / 0011** — the wizard does not yet ask for capability tags (B5, #23);
-  the two-page multi-modal rescue is not built (superseded by ADR-0011).
-  Digital lanes parse natively (C1 #32, C2 #33) with the model pass as the
-  fallback, the browser rasterisation path ships with the served PDF.js worker
+- **0002 / 0011** — the two-page multi-modal rescue is not built (superseded by
+  ADR-0011). Digital lanes parse natively (C1 #32, C2 #33) with the model pass
+  as the fallback, the wizard captures capabilities and keys together (B5,
+  #23), the browser rasterisation path ships with the served PDF.js worker
   asset (A5, #6), and the dependency-free parser choice is recorded in 0002's
-  amendment. The headless-browser check runs against an in-process seam in CI
-  (A6, #7); a real-browser driver run is still pending.
-- **0003** — research lines exist with citation validation and spend caps but do
-  not research autonomously; a line completes through the operator's findings
-  POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding
-  completion B3 (#21). Angles default to the deterministic proposer; LLM
-  proposal is opt-in `mode: "live"`. A corpus upload does not retrigger
+  amendment. The headless-browser check runs against an in-process seam (A6,
+  #7); a real-browser driver run waits on the deployed trial (A17, #18).
+- **0003** — research lines research autonomously within their caps (B1 #19,
+  B2 #20, B3 #21): read-only corpus tools, real spend metered, and findings
+  held when flagged. Angles default to the deterministic proposer unless the
+  installation opts into `mode: "live"`, and a corpus upload does not retrigger
   (unclaimed).
-- **0004 / 0010** — the journalist pass runs inline in the publish path, has no
-  per-pass cap, and falls back to the deterministic render rather than Workers
-  AI (B12, #30). The automatic-publish branch still renders due reports when
-  stored gates are met; ADR-0015 retires it and records gates as advisory, and
-  that code change is not yet claimed by a ticket.
-- **0005 / 0009** — provision and teardown have routes and receipts but have not
-  been exercised against a live Cloudflare account (A16, #17; A17, #18).
-  Re-provisioning is non-destructive (A2, #3): an existing key or operator
-  token is never rewritten, and the rotation path's reseal list covers every
-  sealed column the at-rest audit inspects.
+- **0004 / 0010** — the journalist pass is a resumable Workflow step with a
+  per-pass cap (B12, #30) and falls back deterministically when capped or
+  unusable. The automatic-publish branch still renders due reports when stored
+  gates are met; ADR-0015 retires it and records gates as advisory, and that
+  code change is not yet claimed by a ticket.
+- **0005 / 0009** — provision and teardown have routes and receipts but have
+  not been exercised against a live Cloudflare account (A16, #17; A17, #18).
+  Re-provisioning is non-destructive and rotation reseals every sealed column
+  the audit inspects (A2, #3).
 - **0015** — angles still queue for explicit approval rather than
-  auto-approving unless flagged (B-series engine build, #19–#21), and it is the
-  scheduled digest that still auto-publishes where gates are met (see 0004).
-- **0017 / 0018** — the snapshot store and web-citation validation are B7
-  (#25); fetched-text delimiters and injection flagging are B8 (#26); the
-  Tavily/Parallel search layer is B6 (#24). B10's provider-terms review is
-  drafted in `docs/research/provider-terms-review.md` and awaits human legal
-  sign-off (#27, `ready-for-human`).
-- **0019** — the retention and deletion engine is D1 (#44) and D2 (#45);
-  residency receipts are D6 (#49); the quality-evidence artefacts that gate the
-  public claim are D8 (#51), D9 (#52) and D11 (#54).
+  auto-approving unless flagged (unclaimed), and it is the scheduled digest
+  that still auto-publishes where gates are met (see 0004).
+- **0017 / 0018** — implemented in the second wave: the snapshot store and web
+  citation validation (B7, #25), untrusted fences and injection flagging (B8,
+  #26), and the Tavily/Parallel search and extract layer (B6, #24). Remaining:
+  the Parallel delegation interface (B9, #28) is gated on B10's provider-terms
+  review (`docs/research/provider-terms-review.md`), which awaits human legal
+  sign-off (#27, `ready-for-human`), and delegated leads are re-fetched and
+  snapshotted by B11 (#29).
+- **0019** — implemented: retention categories and configurable windows (D1
+  #44), scheduled sweeps with deletion receipts (D2, #45), residency and
+  data-flow receipts (D6, #49), the report-quality evaluation (D9, #52), the
+  breach/notices/consent/legal-gate set (wave one), and the published Niro
+  report evidence (D10, #53). Remaining: the OCR bake-off's live model lanes
+  (D8, #51, harness and native numbers published) and the evidence-gated
+  README claim (D11, #54).
 - **0012** — resolved: the raw-byte deletion window is enforced by the
   scheduled sweep (A3, #4), both upload paths stream without buffering the body
   (A14 #15, A15 #16), and the ciphertext audit covers every sealed column in the
   schema (A13, #14).
-- **0019** — implemented in the campaign and no longer deviating: breach
-  assessment and NDB workflow (D3, #46), privacy and collection notices (D4,
-  #47), sensitive-category consent (D5, #48), the publication legal gate (D7,
-  #50) and the published Niro report evidence (D10, #53).
