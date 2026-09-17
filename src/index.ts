@@ -49,7 +49,7 @@ import {
   bootstrapInstallation,
   BootstrapError,
 } from "./lib/bootstrap";
-import { liveClient, hasSecretValue } from "./lib/providers";
+import { liveClient, liveSearchClient, hasSecretValue } from "./lib/providers";
 import { resolveEntityLinks } from "./lib/entities";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import {
@@ -1056,8 +1056,20 @@ export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
       await step.do("research-line", async () => {
         const st = await getState(env);
         const client = await liveClient(env.DB, env);
-        const { runResearchLine } = await import("./lib/research");
-        return runResearchLine(env.DB, st.kit, lineId, client);
+        const search = await liveSearchClient(env.DB, env);
+        const { buildWebToolbox, runResearchLine } = await import("./lib/research");
+        // Web tools exist only when a search provider is configured; the
+        // keyless floor stays corpus-only. Fetched pages become snapshots.
+        const web = search
+          ? buildWebToolbox(search, {
+              db: env.DB,
+              kit: st.kit,
+              r2: env.CORPUS,
+              ai: env.AI,
+              now: () => new Date(),
+            })
+          : null;
+        return runResearchLine(env.DB, st.kit, lineId, client, { web });
       });
     }
     await step.do("evaluate-report-frequencies", async () => {

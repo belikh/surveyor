@@ -10,7 +10,17 @@ import { z } from "zod";
 import { searchMirror } from "./rounds";
 import { flagSuspicious } from "./engine";
 import { openText, sealText, type VaultKit } from "./vault";
-import { validateWebCitation } from "./snapshot";
+import {
+  snapshotPage,
+  validateWebCitation,
+  type SnapshotDeps,
+} from "./snapshot";
+import type { SearchClient, SearchPointer } from "./search";
+import {
+  fenceSearchPointers,
+  fenceSnapshot,
+  UNTRUSTED_POLICY,
+} from "./untrusted";
 import { recordTurn } from "./telemetry";
 import type { ModelClient } from "./serve";
 
@@ -54,6 +64,22 @@ export interface CorpusToolbox {
   fetch(docId: string): Promise<{ doc_id: string; text: string } | null>;
 }
 
+/** A web page fetched installation-side: text plus its snapshot identity. */
+export interface WebPage {
+  snapshot_id: string;
+  url: string;
+  fetched_at: string;
+  text: string;
+  flags: string[];
+}
+
+/** Web tools for the live loop: search returns transient pointers, fetch
+ *  turns a URL into an immutable installation snapshot. */
+export interface WebToolbox {
+  search(query: string): Promise<SearchPointer[]>;
+  fetch(url: string): Promise<WebPage>;
+}
+
 /** Statuses whose gated text sits in the mirror. Held docs are raw: the
  *  toolbox cannot reach them. */
 const MIRRORED = "status IN ('parsed', 'OCRed', 'rescued')";
@@ -76,6 +102,28 @@ export function buildCorpusToolbox(
         .first<{ id: string; text_envelope: string }>();
       if (!row) return null;
       return { doc_id: row.id, text: await openText(kit, row.text_envelope) };
+    },
+  };
+}
+
+/** Web toolbox over the search chain and the snapshot store. A keyless or
+ *  searchless installation has no web tools, so it keeps the deterministic
+ *  floor rather than inventing pages. */
+export function buildWebToolbox(
+  search: SearchClient,
+  deps: SnapshotDeps,
+): WebToolbox {
+  return {
+    search: (query) => search.search(query),
+    async fetch(url: string) {
+      const capture = await snapshotPage(deps, url);
+      return {
+        snapshot_id: capture.id,
+        url: capture.final_url,
+        fetched_at: capture.fetched_at,
+        text: capture.text,
+        flags: capture.flags,
+      };
     },
   };
 }
@@ -106,6 +154,11 @@ export type LoopOutcome =
 const ActionSchema = z.union([
   z.object({ tool: z.literal("search"), query: z.string().min(1).max(512) }),
   z.object({ tool: z.literal("fetch"), doc_id: z.string().min(1).max(128) }),
+  z.object({
+    tool: z.literal("web_search"),
+    query: z.string().min(1).max(512),
+  }),
+  z.object({ tool: z.literal("web_fetch"), url: z.string().url().max(2048) }),
   z.object({
     tool: z.literal("final"),
     findings: z.string().min(1).max(50_000),
@@ -207,16 +260,24 @@ export async function liveLoop(
   angle: AngleBrief,
   caps: LoopCaps,
   budget: LoopBudget,
+  web: WebToolbox | null = null,
 ): Promise<LoopOutcome> {
   const header =
     `Research the investigative angle "${angle.title}" using only the ` +
-    `read-only corpus tools below. Rationale: ${angle.rationale}\n` +
+    `read-only tools below. Rationale: ${angle.rationale}\n` +
+    (web ? `${UNTRUSTED_POLICY}\n` : "") +
     `Reply with one JSON object and nothing else.\n` +
     `{"tool":"search","query":"..."} — search the gated mirror\n` +
     `{"tool":"fetch","doc_id":"..."} — read one mirrored document\n` +
+    (web
+      ? `{"tool":"web_search","query":"..."} — search the web ` +
+        `(provider leads only, never evidence)\n` +
+        `{"tool":"web_fetch","url":"..."} — snapshot one web page\n`
+      : "") +
     `{"tool":"final","findings":"...","citations":[{"doc_id":"...",` +
-    `"snippet":"..."}]} — finish; every snippet must occur verbatim in a ` +
-    `document you fetched.`;
+    `"snippet":"..."}]} — or use "snapshot_id" in place of "doc_id" for a ` +
+    `web citation. Finish; every snippet must occur verbatim in a document ` +
+    `or snapshot you fetched.`;
   const transcript: string[] = [];
   const fetched = new Map<string, string>();
   const now = budget.now ?? Date.now;
@@ -286,6 +347,60 @@ export async function liveLoop(
       transcript.push(
         `fetch ${action.doc_id} -> ${doc ? doc.text.slice(0, 2000) : "not found"}`,
       );
+      continue;
+    }
+    if (action.tool === "web_search") {
+      if (!web) {
+        transcript.push(
+          `web_search "${action.query}" -> unavailable (no search provider configured)`,
+        );
+        continue;
+      }
+      let pointers: SearchPointer[];
+      try {
+        pointers = await web.search(action.query);
+      } catch {
+        transcript.push(`web_search "${action.query}" -> unavailable`);
+        continue;
+      }
+      // Provider results are transient pointers, labelled and fenced like
+      // any other fetched text: a fragment is a lead, never a citation.
+      transcript.push(
+        `web_search "${action.query}" -> ${pointers.length} lead(s), ` +
+          `never evidence:\n${fenceSearchPointers(pointers)}`,
+      );
+      continue;
+    }
+    if (action.tool === "web_fetch") {
+      if (!web) {
+        transcript.push(`web_fetch ${action.url} -> unavailable`);
+        continue;
+      }
+      let page: WebPage;
+      try {
+        page = await web.fetch(action.url);
+      } catch (err) {
+        transcript.push(
+          `web_fetch ${action.url} -> unavailable (${err instanceof Error ? err.message : String(err)})`,
+        );
+        continue;
+      }
+      fetched.set(`snapshot:${page.snapshot_id}`, page.text);
+      transcript.push(
+        `web_fetch ${action.url} -> snapshot ${page.snapshot_id}\n` +
+          fenceSnapshot(page, page.text.slice(0, 4000)),
+      );
+      // Flag-and-gate extends to fetched pages: a page carrying injection
+      // markers holds the line here, before another turn can build on it.
+      if (page.flags.length > 0) {
+        return {
+          kind: "held",
+          flags: page.flags,
+          reason: `fetched page carries injection markers (snapshot ${page.snapshot_id})`,
+          tier: client.tier,
+          steps,
+        };
+      }
       continue;
     }
     const citations = action.citations.filter((ci) => {
@@ -467,7 +582,11 @@ export async function runResearchLine(
   kit: VaultKit,
   lineId: string,
   client: ModelClient | null,
-  opts: { caps?: LoopCaps; now?: () => number } = {},
+  opts: {
+    caps?: LoopCaps;
+    now?: () => number;
+    web?: WebToolbox | null;
+  } = {},
 ): Promise<ResearchReceipt> {
   const caps = opts.caps ?? RESEARCH_CAPS;
   const line = await db
@@ -547,12 +666,14 @@ export async function runResearchLine(
     return spendUsed;
   };
   const outcome = client
-    ? await liveLoop(client, toolbox, angle, caps, {
-        spendCap,
-        spendUsed,
-        meter,
-        now: opts.now,
-      })
+    ? await liveLoop(
+        client,
+        toolbox,
+        angle,
+        caps,
+        { spendCap, spendUsed, meter, now: opts.now },
+        opts.web ?? null,
+      )
     : await floorLoop(toolbox, angle);
 
   let receipt: ResearchReceipt;
