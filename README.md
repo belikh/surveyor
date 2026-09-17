@@ -5,8 +5,11 @@ platform. One installation per investigation, fully self-contained in your
 own Cloudflare account.
 
 - **Anonymous submissions** — a survey-framed wizard with proof-of-work and
-  optional human-verification. Identifying originals are never stored;
-  third-party names live only in an encrypted quarantine.
+  optional human-verification. Identifying originals are never stored, with
+  one documented exception: an uploaded attachment is held raw in private R2
+  only until its ingestion lane drains (never past the retry window plus the
+  scheduled sweep), then reduced to gated testimony and deleted (ADR-0012).
+  Third-party names live only in an encrypted quarantine.
 - **Corpus ingestion** — upload PDFs, office documents, and scans. Text
   parses immediately; everything else waits in held lanes for the model
   pass, gated before it reaches any mirror.
@@ -78,3 +81,14 @@ src/frontend/ served shells (setup wizard, survey)
 test/         vitest suites, one per domain
 scripts/      smoke + local-runtime verification
 ```
+
+## Errata
+
+Corrections made when this document was audited against the code (A7, #8);
+each names the claim that changed.
+
+- **2026-09-17** — "Identifying originals are never stored" was stated without
+  qualification. Submitter attachments are a controlled Principle I exception
+  (ADR-0012): the raw file is held in private R2 until its lane drains, then
+  deleted, with the scheduled sweep enforcing the window when no drain comes.
+  The quick-start bullets now carry that exception.

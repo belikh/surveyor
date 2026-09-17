@@ -20,7 +20,10 @@ npm ci && npm run build
 npx wrangler deploy
 ```
 
-Revoke the token straight after; rotate anything it touched.
+Revoke the token straight after. Do not rotate the installation's key
+material as a precaution — rotation is a deliberate, resealing action (see
+**Key rotation and re-sealing** below), and an unnecessary rotation is what
+orphans sealed rows.
 
 ## 2. First-run setup
 
@@ -32,16 +35,22 @@ Open the installation root. The wizard (Mac OS 9 styled) walks:
    Cloudflare API token that can edit this Worker's secrets (Workers
    Scripts: Edit), your account id and the script name, choose an operator
    token (`Generate` is fine) and save it somewhere safe, then press **Boot
-   installation**. The key material is minted inside the Worker and never
-   shown; the operator token is your choice and is shown only on that panel.
-   Revoke the pasted Cloudflare token afterwards. Alternatively, set all
-   three yourself with `npx wrangler secret put SERVER_SECRET` (then
-   `ENCRYPTION_KEY` and `OPERATOR_TOKEN`) before opening the wizard.
+   installation**. `SERVER_SECRET` and `ENCRYPTION_KEY` are minted inside the
+   Worker and never shown or returned. The operator token is your choice: the
+   panel only echoes what you typed or what the **Generate** button made in
+   your own browser, and the installation never returns it — the receipt
+   carries slot names and booleans only. Revoke the pasted Cloudflare token
+   afterwards. Alternatively, set all three yourself with
+   `npx wrangler secret put SERVER_SECRET` (then `ENCRYPTION_KEY` and
+   `OPERATOR_TOKEN`) before opening the wizard.
 2. **Worker token** — paste the operator token you chose at boot if the page
    reloaded. It gates every write surface.
 3. **Providers** — optional. Add OpenAI-compatible entries (base URL, key,
-   model) or leave empty. Empty runs degraded: static question fallbacks,
-   Workers AI as the keyless tier, and a visible dashboard warning.
+   model) or leave empty. Empty runs degraded: static question fallbacks and
+   deterministic (non-model) angles and report prose, with Workers AI covering
+   keyless document conversion and OCR in the ingestion lanes, plus a visible
+   dashboard warning. Workers AI is not used for chat, angles, rounds or
+   report drafting.
 4. **Instrument** — survey title, blurb, and consent copy. Consent copy is
    verbatim on the public survey.
 
@@ -144,3 +153,21 @@ collecting testimony.
 
 Rows sealed under a key you no longer hold cannot be recovered. `GET
 /api/status` reports `provisioned: false` while key material is missing.
+
+## Errata
+
+Corrections made when this document was audited against the code (A7, #8);
+each names the claim that changed.
+
+- **2026-09-17** — "Workers AI as the keyless tier" implied the model runs
+  everywhere. It serves the ingestion lanes (document conversion and OCR);
+  angles, rounds and report prose degrade to deterministic output with no
+  Workers AI call. The providers step now says so.
+- **2026-09-17** — the boot step said the operator token "is shown only on that
+  panel", which read as the installation returning it. No code path returns
+  it: the panel echoes the operator's own typed or browser-generated value and
+  the receipt carries slot names and booleans only.
+- **2026-09-17** — the fallback install path said to "rotate anything it
+  touched" after using a scoped token. Rotation is deliberate, requires
+  resealing existing rows, and a needless rotation is what orphans sealed
+  data; the line now warns against it.

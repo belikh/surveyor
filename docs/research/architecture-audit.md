@@ -237,22 +237,27 @@ enacts the decision; deviations are named with evidence.
 
 ### 4.1 Statements the code does not bear out
 
-| Claim | Where claimed | What the code shows |
-|---|---|---|
-| "Identifying originals are never stored" | `README.md:8-9` | True for free text, false for submitter attachments: raw pages/PDFs sit unencrypted in R2 until drain (`THREAT-MODEL.md:166-180`; `src/routes/intake.ts:337-344`). The README does not carry this documented exception. |
-| "Worker token — paste the operator token the provision step showed" | `RUNBOOK.md:29-31` | No code path ever returns a generated secret value (`src/lib/cfapi.ts:146-162`; `src/lib/provision.ts:56-60`). The receipt carries `{slot, set, generated}` only. |
-| "Empty runs degraded: … Workers AI as the keyless tier" | `RUNBOOK.md:32-34` | The `AI` binding serves document conversion and OCR only (`src/lib/drain.ts:180-300`; `src/lib/lanes.ts:12-34`). Angles, rounds, and report prose degrade to deterministic/static output with no Workers AI call (`src/lib/providers.ts:39-53`; `src/lib/rounds.ts:79`). |
-| "Flags are admin-only hints; no code path hides, deletes, or gates on a flag" | `SECURITY.md:36` | Flags gate: flagged angles list as `held` and are refused approval (`src/routes/engine.ts:98-100`, `118-121`); flagged lines are stored `held` and excluded from evidence (`src/routes/engine.ts:230`; `src/lib/evidence.ts:41`); flagged model prose is dropped for the deterministic body (`src/lib/publish.ts:139-147`). |
-| "model output is … never used to author question text the operator did not write" | `SECURITY.md:47-49` | Model-authored rounds are served to sources (`src/lib/rounds.ts:89-94`, `119-122`; `src/routes/intake.ts:453-465`). `THREAT-MODEL.md:64-66` concedes this; `SECURITY.md` contradicts it. |
-| "SQL injection … A grep gate asserts this in review" | `SECURITY.md:65-66` | No such gate exists in CI (`ci.yml:10-21`) or in the tests (search found none). Dynamic SQL fragments are count-derived placeholders plus a constant table list (`src/routes/intake.ts:445`; `src/lib/retrigger.ts:63-68`; `src/index.ts:534-548`). |
-| "At-rest storage is ciphertext-only | `/api/audit/ciphertext` reports envelope counts…" | `SECURITY.md:37` | The endpoint inspects four tables (`src/index.ts:615-620`), while five more sealed columns exist (`attachments.filename`, `corpus_docs.filename`, `angles.rationale_envelope`, `research_lines.findings_envelope`, `report_entries.entry_envelope`: `src/index.ts:540-547`). The smoke script's "ciphertext-only" receipt therefore under-covers. |
-| "read-only tools only; `maxSteps`/length caps; … tool-vocabulary leakage" | `THREAT-MODEL.md:60-63` | No tools and no multi-step agent exist; all model calls are single-shot completions (`src/lib/serve.ts:260-289`). `toolCalls` is a telemetry column, not a cap. Output policing covers injection markers only (`src/lib/engine.ts:142-175`). |
-| "a lifecycle rule must abort incomplete multipart uploads" | `THREAT-MODEL.md:82-83` | No lifecycle configuration exists in `wrangler.toml` or `src/lib/cfapi.ts`. |
-| "Corpus uploads … retrigger" (new material incl. a corpus upload) | `docs/adr/0003-digest-angles-and-research-engine.md:31-36` | Corpus upload never calls retrigger (`src/routes/corpus.ts` has no call); only submission/round completion and the manual route do (`src/routes/intake.ts:438-440`; `src/routes/engine.ts:350-373`). |
-| "streamed, not buffered" for submitter uploads; "An upload streams the bytes to R2" | `docs/adr/0012-submitter-file-uploads.md:21-24`; `docs/adr/0002-corpus-ingestion-and-ocr.md:22-24` | Both paths buffer: submitter attachments call `arrayBuffer()` (`src/routes/intake.ts:298`); corpus uploads parse a base64 JSON body (`src/lib/ingest.ts:98-102`; `src/routes/corpus.ts:30-44`). |
-| "then deletes them" after the 24 h retry window | `docs/adr/0012-submitter-file-uploads.md:25-26` | `retry_after` only gates re-drain attempts (`src/lib/attachments.ts:86-93`); no scheduled or queued sweep deletes expired raw bytes (`src/index.ts:858-891`). A file that is never drained again stays in R2 indefinitely. |
-| "Angles are LLM-proposed end-to-end … there is no separate deterministic digest stage" | `docs/adr/0003-digest-angles-and-research-engine.md:22-25` | The deterministic proposer is the default (`src/routes/engine.ts:31`; `src/lib/engine.ts:57-84`); the LLM proposer is opt-in `mode: "live"` and falls back to the floor on any error (`src/lib/serve.ts:85-104`). |
-| "One pass per report type, each a resumable Workflow step … a per-pass spend cap; … Workers AI fallback" | `docs/adr/0010-journalist-pass.md:17-20` | The pass runs inline in the HTTP/scheduler publish path (`src/lib/publish.ts:127`); there is no pass step in `EngineWorkflow` (`src/index.ts:828-853`); no per-pass cap exists; the fallback is the deterministic render, not Workers AI (`src/lib/providers.ts:39-53`). |
+Each row states its resolution: **resolved** means the claim now matches the
+code (with the landing that fixed it), **open** means it is tracked by the
+named ticket. Documentation rows for `README.md`, `SECURITY.md` and
+`RUNBOOK.md` were corrected by A7 (#8) on 2026-09-17.
+
+| Claim | Where claimed | What the code shows | Resolution |
+|---|---|---|---|
+| "Identifying originals are never stored" | `README.md:8-9` | True for free text, false for submitter attachments: raw pages/PDFs sit unencrypted in R2 until drain (`THREAT-MODEL.md:166-180`; `src/routes/intake.ts:337-344`). The README does not carry this documented exception. | **Resolved — A7 (#8)**: README now names the ADR-0012 attachment exception, its bounded window and the sweep. |
+| "Worker token — paste the operator token the provision step showed" | `RUNBOOK.md:29-31` | No code path ever returns a generated secret value (`src/lib/cfapi.ts:146-162`; `src/lib/provision.ts:56-60`). The receipt carries `{slot, set, generated}` only. | **Resolved — A1 (#2), restated by A7 (#8)**: the boot step has the operator choose the token and states the installation never returns it. |
+| "Empty runs degraded: … Workers AI as the keyless tier" | `RUNBOOK.md:32-34` | The `AI` binding serves document conversion and OCR only (`src/lib/drain.ts:180-300`; `src/lib/lanes.ts:12-34`). Angles, rounds, and report prose degrade to deterministic/static output with no Workers AI call (`src/lib/providers.ts:39-53`; `src/lib/rounds.ts:79`). | **Resolved — A7 (#8)**: the runbook scopes Workers AI to the ingestion lanes and names the deterministic degradation. |
+| "Flags are admin-only hints; no code path hides, deletes, or gates on a flag" | `SECURITY.md:36` | Flags gate: flagged angles list as `held` and are refused approval (`src/routes/engine.ts:98-100`, `118-121`); flagged lines are stored `held` and excluded from evidence (`src/routes/engine.ts:230`; `src/lib/evidence.ts:41`); flagged model prose is dropped for the deterministic body (`src/lib/publish.ts:139-147`). | **Resolved — A7 (#8)**: the security table now describes the gating holds. |
+| "model output is … never used to author question text the operator did not write" | `SECURITY.md:47-49` | Model-authored rounds are served to sources (`src/lib/rounds.ts:89-94`, `119-122`; `src/routes/intake.ts:453-465`). `THREAT-MODEL.md:64-66` concedes this; `SECURITY.md` contradicts it. | **Resolved — A7 (#8)**: the LLM02 mapping now names model-authored follow-ups and their validation. |
+| "SQL injection … A grep gate asserts this in review" | `SECURITY.md:65-66` | No such gate exists in CI (`ci.yml:10-21`) or in the tests (search found none). Dynamic SQL fragments are count-derived placeholders plus a constant table list (`src/routes/intake.ts:445`; `src/lib/retrigger.ts:63-68`; `src/index.ts:534-548`). | **Resolved — A7 (#8)**: claim removed; the mapping names the real controls and says there is no gate. |
+| "At-rest storage is ciphertext-only | `/api/audit/ciphertext` reports envelope counts…" | `SECURITY.md:37` | The endpoint inspects four tables (`src/index.ts:615-620`), while five more sealed columns exist (`attachments.filename`, `corpus_docs.filename`, `angles.rationale_envelope`, `research_lines.findings_envelope`, `report_entries.entry_envelope`: `src/index.ts:540-547`). The smoke script's "ciphertext-only" receipt therefore under-covers. | **Partially resolved — A7 (#8)**: the table names the four audited columns and the gap; the code side is A13 (#14). |
+| "read-only tools only; `maxSteps`/length caps; … tool-vocabulary leakage" | `THREAT-MODEL.md:60-63` | No tools and no multi-step agent exist; all model calls are single-shot completions (`src/lib/serve.ts:260-289`). `toolCalls` is a telemetry column, not a cap. Output policing covers injection markers only (`src/lib/engine.ts:142-175`). | **Open — Stream B engine build (B1 #19, B2 #20)**; the threat model describes the target engine. |
+| "a lifecycle rule must abort incomplete multipart uploads" | `THREAT-MODEL.md:82-83` | No lifecycle configuration exists in `wrangler.toml` or `src/lib/cfapi.ts`. | **Open — unclaimed.** |
+| "Corpus uploads … retrigger" (new material incl. a corpus upload) | `docs/adr/0003-digest-angles-and-research-engine.md:31-36` | Corpus upload never calls retrigger (`src/routes/corpus.ts` has no call); only submission/round completion and the manual route do (`src/routes/intake.ts:438-440`; `src/routes/engine.ts:350-373`). | **Open — unclaimed.** |
+| "streamed, not buffered" for submitter uploads; "An upload streams the bytes to R2" | `docs/adr/0012-submitter-file-uploads.md:21-24`; `docs/adr/0002-corpus-ingestion-and-ocr.md:22-24` | Both paths buffer: submitter attachments call `arrayBuffer()` (`src/routes/intake.ts:298`); corpus uploads parse a base64 JSON body (`src/lib/ingest.ts:98-102`; `src/routes/corpus.ts:30-44`). | **Open — A14 (#15), A15 (#16).** |
+| "then deletes them" after the 24 h retry window | `docs/adr/0012-submitter-file-uploads.md:25-26` | `retry_after` only gates re-drain attempts (`src/lib/attachments.ts:86-93`); no scheduled or queued sweep deletes expired raw bytes (`src/index.ts:858-891`). A file that is never drained again stays in R2 indefinitely. | **Resolved — A3 (#4)**: the scheduled raw-byte sweep deletes expired bytes and receipts the deletion. |
+| "Angles are LLM-proposed end-to-end … there is no separate deterministic digest stage" | `docs/adr/0003-digest-angles-and-research-engine.md:22-25` | The deterministic proposer is the default (`src/routes/engine.ts:31`; `src/lib/engine.ts:57-84`); the LLM proposer is opt-in `mode: "live"` and falls back to the floor on any error (`src/lib/serve.ts:85-104`). | **Open — Stream B engine build (B1 #19–B3 #21).** |
+| "One pass per report type, each a resumable Workflow step … a per-pass spend cap; … Workers AI fallback" | `docs/adr/0010-journalist-pass.md:17-20` | The pass runs inline in the HTTP/scheduler publish path (`src/lib/publish.ts:127`); there is no pass step in `EngineWorkflow` (`src/index.ts:828-853`); no per-pass cap exists; the fallback is the deterministic render, not Workers AI (`src/lib/providers.ts:39-53`). | **Open — B12 (#30).** |
 
 ### 4.2 Dead or unreferenced code
 
@@ -364,6 +369,15 @@ Entry points with no test at all:
     in this repository's history (history begins at `fcb4324`). The evidence
     cannot be reproduced from this repo; the script itself still passes today
     per the CI wiring, but the recorded run is unverifiable here.
+
+**Status (2026-09-17).** A7 (#8) resolved items 1–4 by correcting
+`SECURITY.md`, `README.md` and `RUNBOOK.md` (each document carries an Errata
+section). Item 5 is answered by the harness itself: `niro/harness/start.sh`
+generates `SERVER_SECRET`/`ENCRYPTION_KEY` and supplies them as vars, and
+`state.ts` genuinely has no development fallback, so the RUNBOOK statement is
+correct and the workflow comment is loose wording. Items 6–9 are the ADR
+corpus cleanup in A8 (#9); item 10 stands as an unverifiable historical
+receipt.
 
 ---
 
