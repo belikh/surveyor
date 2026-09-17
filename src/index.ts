@@ -38,6 +38,10 @@ import {
   type ProvisionReceipt,
 } from "./lib/provision";
 import { createCloudflareApi } from "./lib/cfapi";
+import {
+  bootstrapInstallation,
+  BootstrapError,
+} from "./lib/bootstrap";
 import { liveClient, hasSecretValue } from "./lib/providers";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
@@ -86,11 +90,13 @@ app.notFound((c) => c.json({ error: "not_found" }, 404));
 app.onError((err, c) => {
   // Missing key material is a deployment state, not a bad request: say so
   // plainly and fail closed wherever sealed data would be read or written.
-  if (err instanceof InstallationUnprovisioned) {
+    if (err instanceof InstallationUnprovisioned) {
     return c.json(
       {
         error: "not_provisioned",
-        detail: "SERVER_SECRET / ENCRYPTION_KEY missing",
+        detail:
+          "SERVER_SECRET / ENCRYPTION_KEY missing — open the wizard and " +
+          "boot the installation",
       },
       503,
     );
@@ -254,6 +260,41 @@ app.get("/api/setup/token-guidance", (c) =>
   c.json({ scopes: REQUIRED_SCOPES, guidance: REVOCATION_GUIDANCE }),
 );
 
+// First-run bootstrap (A1). No operator token can exist yet, so this is
+// deliberately reachable while unprovisioned; it writes nothing without a
+// Cloudflare token that can already edit this Worker, and it refuses once
+// the master slots are set (rotation is never a side effect). The operator
+// chooses the operator token, the key material is minted in-flight, and the
+// receipt carries slot names and booleans only.
+const BootstrapBodySchema = z.object({
+  cf_token: z.string().min(1).max(4096),
+  account_id: z.string().min(1).max(64),
+  script_name: z.string().min(1).max(128),
+  operator_token: z.string().min(16).max(512).optional(),
+});
+
+app.post("/api/bootstrap", async (c) => {
+  const parsed = BootstrapBodySchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  try {
+    const receipt = await bootstrapInstallation(c.env, parsed.data);
+    return c.json({ ok: true, ...receipt });
+  } catch (err) {
+    if (err instanceof BootstrapError) {
+      return c.json(
+        { error: err.code, detail: err.message },
+        err.code === "already_provisioned" ? 409 : 422,
+      );
+    }
+    return c.json(
+      { error: "secret_write_failed", detail: (err as Error).message },
+      502,
+    );
+  }
+});
+
 // Secret presence: a slot counts as configured only when it is one of the
 // provider key slots AND its binding is set. Only truthiness is ever
 // inspected — values are never read, logged, or returned (constitution II).
@@ -287,8 +328,9 @@ app.get("/api/status", async (c) => {
         degraded: true,
         warning:
           "Not provisioned — SERVER_SECRET / ENCRYPTION_KEY missing. " +
-          "This installation cannot seal testimony until they are set.",
+          "Open the wizard to boot the installation.",
         provisioned: false,
+        operator_token_set: Boolean(c.env.OPERATOR_TOKEN),
       });
     }
     throw err;
@@ -300,11 +342,15 @@ app.get("/api/status", async (c) => {
     degraded: boolean;
     warning: string | null;
     provisioned: boolean;
+    operator_token_set: boolean;
     turnstile_sitekey?: string;
   } = {
     degraded,
     warning,
     provisioned: true,
+    // The write surfaces answer 404 while this is unset; the wizard must be
+    // able to see that honestly rather than discover it on first write.
+    operator_token_set: Boolean(c.env.OPERATOR_TOKEN),
   };
   if (c.env.TURNSTILE_SECRET && c.env.TURNSTILE_SITEKEY) {
     body.turnstile_sitekey = c.env.TURNSTILE_SITEKEY;
@@ -693,10 +739,13 @@ const ProvisionBodySchema = CfCredsSchema.extend({
 
 // Secrets the runtime provisioner installs. Generated slots are minted
 // in-flight; operator-supplied slots are presence-checked only.
+// OPERATOR_TOKEN is always operator-supplied: the provisioner requires it
+// to run, and minting a replacement it never reveals would lock the
+// operator out (the bootstrap screen owns the fresh-install choice).
 const PROVISION_SECRETS = [
   { slot: "SERVER_SECRET", generate: true },
   { slot: "ENCRYPTION_KEY", generate: true },
-  { slot: "OPERATOR_TOKEN", generate: true },
+  { slot: "OPERATOR_TOKEN", generate: false },
   { slot: "GROQ_API_KEY", generate: false },
   { slot: "TOKENROUTER_API_KEY", generate: false },
   { slot: "TURNSTILE_SECRET", generate: false },

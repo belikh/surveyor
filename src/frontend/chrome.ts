@@ -82,12 +82,63 @@ function frame(title, lamp, body) {
       el("div", { class: "os9-body" }, body)));
 }
 function tokenPanel() {
-  const t = el("input", { type: "password", placeholder: "Operator token (from provision)" });
+  const t = el("input", { type: "password", placeholder: "Operator token (chosen at boot)" });
   const note = el("span", { class: "warn" }, OP_TOKEN ? " \u2014 set" : " \u2014 not set");
   const set = el("button", { class: "os9-btn" }, "Set");
   set.onclick = () => { OP_TOKEN = t.value.trim(); render(); };
   return el("div", { class: "os9-panel" }, el("strong", {}, "Worker token"), note,
     el("div", {}, t, set));
+}
+function newOperatorToken() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  let s = "";
+  for (const x of b) s += x.toString(16).padStart(2, "0");
+  return "op-" + s;
+}
+// Fresh-install boot: no key material, no operator token, so no write is
+// possible yet. The operator supplies a transient Cloudflare token that can
+// edit this Worker's secrets and chooses the operator token; the key
+// material is minted in the Worker and never shown.
+function bootstrapPanel() {
+  const note = el("p", { class: "warn" }, "");
+  const cf = el("input", { type: "password", placeholder: "Cloudflare API token (Workers Scripts: Edit)" });
+  const account = el("input", { placeholder: "Cloudflare account id" });
+  const script = el("input", { placeholder: "Worker script name (e.g. surveyor)" });
+  const op = el("input", { placeholder: "Operator token \u2014 choose one and save it" });
+  const gen = el("button", { class: "os9-btn" }, "Generate");
+  gen.onclick = () => {
+    OP_TOKEN = newOperatorToken();
+    op.value = OP_TOKEN;
+    note.textContent = "Operator token generated. It is shown only here \u2014 save it now.";
+  };
+  const boot = el("button", { class: "os9-btn" }, "Boot installation");
+  boot.onclick = async () => {
+    const chosen = op.value.trim();
+    if (!chosen) { note.textContent = "Choose or generate an operator token first."; return; }
+    note.textContent = "Writing the master secrets\u2026";
+    try {
+      await api("/api/bootstrap", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          cf_token: cf.value || CF_TOKEN,
+          account_id: account.value,
+          script_name: script.value,
+          operator_token: chosen,
+        }),
+      });
+      OP_TOKEN = chosen;
+      note.textContent = "Installation booted.";
+      render();
+    } catch (e) {
+      note.textContent = "Boot failed: " + e.message;
+    }
+  };
+  return el("div", { class: "os9-panel" },
+    el("strong", {}, "Boot the installation"),
+    el("p", {}, "This installation has no key material yet. Booting sets SERVER_SECRET, ENCRYPTION_KEY and OPERATOR_TOKEN in your own Cloudflare account; no value is logged, stored, or returned."),
+    cf, account, script, op, gen, note, boot);
 }
 function providersPanel(st) {
   const body = [];
@@ -177,8 +228,9 @@ async function render() {
   }
   body.push(el("div", { class: "os9-progress", "aria-label": "setup progress" },
     el("div", { style: "width:" + ((at) * 25) + "%" })));
+  const needsBoot = !status || status.provisioned === false || status.operator_token_set === false;
   if (!OP_TOKEN) {
-    body.push(tokenPanel());
+    body.push(needsBoot ? bootstrapPanel() : tokenPanel());
   }
   if (st.phase === "ready") {
     body.push(el("div", { class: "os9-panel" },

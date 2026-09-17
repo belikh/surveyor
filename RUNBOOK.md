@@ -26,12 +26,23 @@ Revoke the token straight after; rotate anything it touched.
 
 Open the installation root. The wizard (Mac OS 9 styled) walks:
 
-1. **Worker token** — paste the operator token the provision step showed.
-   Store it somewhere safe; it gates every write surface.
-2. **Providers** — optional. Add OpenAI-compatible entries (base URL, key,
+1. **Boot** — a fresh install has no key material, so nothing can be written
+   until the three master secrets exist. The boot panel sets `SERVER_SECRET`,
+   `ENCRYPTION_KEY` and `OPERATOR_TOKEN` in your own account: paste a
+   Cloudflare API token that can edit this Worker's secrets (Workers
+   Scripts: Edit), your account id and the script name, choose an operator
+   token (`Generate` is fine) and save it somewhere safe, then press **Boot
+   installation**. The key material is minted inside the Worker and never
+   shown; the operator token is your choice and is shown only on that panel.
+   Revoke the pasted Cloudflare token afterwards. Alternatively, set all
+   three yourself with `npx wrangler secret put SERVER_SECRET` (then
+   `ENCRYPTION_KEY` and `OPERATOR_TOKEN`) before opening the wizard.
+2. **Worker token** — paste the operator token you chose at boot if the page
+   reloaded. It gates every write surface.
+3. **Providers** — optional. Add OpenAI-compatible entries (base URL, key,
    model) or leave empty. Empty runs degraded: static question fallbacks,
    Workers AI as the keyless tier, and a visible dashboard warning.
-3. **Instrument** — survey title, blurb, and consent copy. Consent copy is
+4. **Instrument** — survey title, blurb, and consent copy. Consent copy is
    verbatim on the public survey.
 
 Secrets are written straight to the Cloudflare secret store; they never
@@ -95,9 +106,9 @@ are listed as not-wiped.
 
 | Slot | When | Who sets |
 |---|---|---|
-| `SERVER_SECRET` | Always | Provisioning (generated) |
-| `ENCRYPTION_KEY` | Always | Provisioning (generated) |
-| `OPERATOR_TOKEN` | Always | Provisioning (generated) |
+| `SERVER_SECRET` | Always | Boot panel (minted in-Worker) or operator |
+| `ENCRYPTION_KEY` | Always | Boot panel (minted in-Worker) or operator |
+| `OPERATOR_TOKEN` | Always | Operator's choice, entered at boot |
 | `GROQ_API_KEY` | Optional | Operator |
 | `TOKENROUTER_API_KEY` | Optional | Operator |
 | `TURNSTILE_SECRET` | Optional | Operator |

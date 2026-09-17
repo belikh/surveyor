@@ -44,8 +44,9 @@ function hex(bytes: Uint8Array): string {
     .join("");
 }
 
-/** Generate a secret value in-flight, per slot convention. */
-function generateSecret(slot: string): string {
+/** Generate a secret value in-flight, per slot convention. Shared with the
+ *  first-run bootstrap, which mints the same master slots. */
+export function generateSecret(slot: string): string {
   if (slot === "ENCRYPTION_KEY") return hex(randomBytes(32));
   return b64url(randomBytes(32));
 }

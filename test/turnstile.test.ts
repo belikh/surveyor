@@ -129,6 +129,7 @@ describe("Turnstile configuration surface", () => {
     expect(off.turnstile_sitekey).toBeUndefined();
     expect(Object.keys(off).sort()).toEqual([
       "degraded",
+      "operator_token_set",
       "provisioned",
       "warning",
     ]);
