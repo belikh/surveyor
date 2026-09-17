@@ -8,7 +8,7 @@ import { gateCorpusText } from "./ingest";
 import type { QuarantineHit } from "./intake";
 import { extractNativeText } from "./native";
 import type { ModelClient } from "./serve";
-import { transcribeMedia } from "./transcribe";
+import { transcribeMedia, type TranscribeOutcome } from "./transcribe";
 
 export interface HeldDoc {
   id: string;
@@ -131,6 +131,9 @@ export interface DrainProviders {
   ai?: AiBinding;
   /** Registry chain restricted to vision-capable entries, when configured. */
   visionClient?: ModelClient | null;
+  /** Registry chain restricted to audio-capable entries: the transcription
+   *  rescue lane, spent only when the keyless default cannot read a file. */
+  audioClient?: ModelClient | null;
 }
 
 const OCR_MODEL = "@cf/moondream/moondream3.1-9B-A2B";
@@ -331,34 +334,101 @@ export function buildDrainHandlers(providers: DrainProviders): DrainHandler[] {
     },
   };
 
-  // Audio/video: the keyless Workers AI transcription is the only default
-  // path (there is no native audio parser and no server-side demux), so a
-  // missing binding holds the file with the capability named.
+  // Audio/video: the keyless Workers AI transcription is the default path
+  // (there is no native audio parser and no server-side demux); when it
+  // fails, an audio-tagged registry entry is the rescue lane. Both paths
+  // run the same chunk plan and per-file cap, so over-cap media is held
+  // before any provider is spent. With neither configured the file stays
+  // held with the missing capability named.
+  const audioClient = providers.audioClient;
+  const rescue = audioClient?.transcribe
+    ? {
+        tier: audioClient.tier,
+        model: audioClient.audioModel ?? "registry-audio",
+        run: (audioBase64: string) => audioClient.transcribe!(audioBase64),
+      }
+    : null;
+
   const transcribeLane: DrainHandler = {
     handler: "transcribe",
-    tier: providers.ai?.run ? "workers-ai-whisper" : "none",
+    tier: providers.ai?.run
+      ? "workers-ai-whisper"
+      : (rescue?.tier ?? "none"),
     extract: async (doc: HeldDoc): Promise<LaneResult> => {
-      if (!providers.ai?.run) {
+      const bytes = decodeB64(doc.bytes_b64);
+      const runRescue = async (): Promise<TranscribeOutcome> =>
+        transcribeMedia(
+          async (_model, inputs) => ({
+            text: await rescue!.run(String(inputs.audio)),
+          }),
+          bytes,
+          { model: rescue!.model },
+        );
+
+      if (providers.ai?.run) {
+        const out = await transcribeMedia(
+          providers.ai.run.bind(providers.ai),
+          bytes,
+        );
+        if (out.ok) {
+          return {
+            ok: true,
+            text: out.transcription.text,
+            tier: "workers-ai-whisper",
+            status: "transcribed",
+          };
+        }
+        if (!rescue) {
+          return {
+            ok: false,
+            reason:
+              `${out.reason}; no audio-capable registry entry configured ` +
+              "to rescue it",
+            tier: "workers-ai-whisper",
+          };
+        }
+        const rescued = await runRescue();
+        if (rescued.ok) {
+          return {
+            ok: true,
+            text: rescued.transcription.text,
+            tier: rescue.tier,
+            status: "rescued",
+          };
+        }
+        return {
+          ok: false,
+          reason: `${out.reason}; rescue lane failed: ${rescued.reason}`,
+          tier: rescue.tier,
+        };
+      }
+
+      if (rescue) {
+        const rescued = await runRescue();
+        if (rescued.ok) {
+          return {
+            ok: true,
+            text: rescued.transcription.text,
+            tier: rescue.tier,
+            status: "rescued",
+          };
+        }
         return {
           ok: false,
           reason:
-            `no capable provider configured for ${doc.lane} — enable the ` +
-            "Workers AI binding (env.AI) to transcribe this file",
-          tier: "none",
+            `Workers AI binding unavailable; rescue lane failed: ` +
+            `${rescued.reason}`,
+          tier: rescue.tier,
         };
       }
-      const out = await transcribeMedia(
-        providers.ai.run.bind(providers.ai),
-        decodeB64(doc.bytes_b64),
-      );
-      if (!out.ok) {
-        return { ok: false, reason: out.reason, tier: "workers-ai-whisper" };
-      }
+
       return {
-        ok: true,
-        text: out.transcription.text,
-        tier: "workers-ai-whisper",
-        status: "transcribed",
+        ok: false,
+        reason:
+          `no capable provider configured for ${doc.lane} — enable the ` +
+          "Workers AI binding (env.AI) or add an audio-capable registry " +
+          "entry to transcribe this file",
+        tier: "none",
       };
     },
   };

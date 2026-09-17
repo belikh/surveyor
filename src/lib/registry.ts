@@ -13,12 +13,13 @@ import {
 
 export type UsableEntry = ProviderEntry;
 
-export type ProviderCapability = "chat" | "vision" | "search";
+export type ProviderCapability = "chat" | "vision" | "search" | "audio";
 
 /** Capability routing over the registry. Entries are chat-capable unless
- *  tagged for a different transport ("search"); vision and search each
- *  require their tag. One rule for every consumer, so a search entry is
- *  never spent on a chat call and a chat entry is never sent a web query. */
+ *  tagged for a different transport ("search"); vision, search and audio
+ *  each require their tag. One rule for every consumer, so a search entry
+ *  is never spent on a chat call and a chat entry is never sent a web
+ *  query or an audio chunk. */
 export function entriesForCapability<T extends { capabilities?: string[] }>(
   entries: T[],
   capability: ProviderCapability,

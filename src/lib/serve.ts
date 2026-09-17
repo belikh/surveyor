@@ -24,6 +24,11 @@ export interface ModelClient {
   complete(prompt: string): Promise<string>;
   /** Send an image through a vision-capable entry (tagged in the registry). */
   completeVision?(prompt: string, imageBase64: string, mediaType: string): Promise<string>;
+  /** Transcribe one inline audio chunk through an audio-tagged entry (the
+   *  BYOK rescue lane for held media the keyless default cannot read). */
+  transcribe?(audioBase64: string): Promise<string>;
+  /** Requested model id of the first audio-tagged entry, for provenance. */
+  audioModel?: string;
 }
 
 export interface Turn {
@@ -207,6 +212,7 @@ export function buildChainClient(
 ): ModelClient {
   const chatEntries = entriesForCapability(entries, "chat");
   const visionEntries = entriesForCapability(entries, "vision");
+  const audioEntries = entriesForCapability(entries, "audio");
 
   // `redirect: "manual"` returns the 3xx to the SDK instead of following it;
   // the hop that would have carried the key never happens.
@@ -297,5 +303,38 @@ export function buildChainClient(
         });
         return text;
       }),
+    // Transcription shares the chain's transport rules: the key travels only
+    // to an allowed host, redirects are refused, and 429/5xx fall through to
+    // the next audio-tagged entry while other 4xx surfaces.
+    transcribe: (audioBase64: string): Promise<string> =>
+      run(audioEntries, async (_provider, e) => {
+        const url = `${baseFor(e)}/audio/transcriptions`;
+        const bytes = Uint8Array.from(atob(audioBase64), (ch) =>
+          ch.charCodeAt(0),
+        );
+        const form = new FormData();
+        form.set("model", e.model);
+        form.set("response_format", "json");
+        form.set("file", new Blob([bytes], { type: "audio/mpeg" }), "chunk");
+        const res = await guardedFetch(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${secrets(e.secret_slot) ?? ""}` },
+          body: form,
+        });
+        if (!res.ok) {
+          throw new APICallError({
+            message: `HTTP ${res.status}`,
+            url,
+            requestBodyValues: { model: e.model },
+            statusCode: res.status,
+            responseBody: await res.text().catch(() => ""),
+          });
+        }
+        const body = (await res.json().catch(() => null)) as {
+          text?: unknown;
+        } | null;
+        return typeof body?.text === "string" ? body.text : "";
+      }),
+    audioModel: audioEntries[0]?.model,
   };
 }

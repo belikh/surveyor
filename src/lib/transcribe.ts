@@ -6,7 +6,8 @@
 // bounded chunks with an overlap window and stitches the per-chunk text
 // into one ordered transcript. A failed or malformed chunk never yields a
 // partial transcript: the whole file stays held with the chunk named, so
-// the operator can retry or route it to the BYOK rescue lane (C7).
+// the drain can retry it or route it to the BYOK rescue lane (C7), which
+// reuses the same chunk plan and cap with a different model.
 
 /** Keyless default: cheapest published ASR tier on Workers AI. */
 export const TRANSCRIBE_MODEL = "@cf/openai/whisper-large-v3-turbo";
@@ -31,6 +32,8 @@ export interface ChunkPlanOptions {
   overlapBytes?: number;
   /** Per-file ceiling, in chunks. */
   maxChunks?: number;
+  /** Model id recorded as provenance; defaults to the keyless model. */
+  model?: string;
 }
 
 export interface MediaChunkRange {
@@ -134,7 +137,8 @@ function transcriptionText(raw: unknown): string | null {
 }
 
 /**
- * Transcribe held media through the keyless model. Returns a held reason —
+ * Transcribe held media through the default keyless model (or the model
+ * named in `opts`, for the registry rescue lane). Returns a held reason —
  * never a partial transcript — when a chunk fails or replies without text,
  * and refuses over-cap media before the first model call.
  */
@@ -143,6 +147,7 @@ export async function transcribeMedia(
   source: Uint8Array,
   opts: ChunkPlanOptions = {},
 ): Promise<TranscribeOutcome> {
+  const model = opts.model ?? TRANSCRIBE_MODEL;
   const ranges = planMediaChunks(source.length, opts);
   const maxChunks = opts.maxChunks ?? MAX_TRANSCRIBE_CHUNKS;
   if (ranges.length > maxChunks) {
@@ -158,7 +163,7 @@ export async function transcribeMedia(
   for (const range of ranges) {
     let raw: unknown;
     try {
-      raw = await run(TRANSCRIBE_MODEL, {
+      raw = await run(model, {
         audio: toBase64(source.subarray(range.start, range.end)),
       });
     } catch (err) {
@@ -181,5 +186,5 @@ export async function transcribeMedia(
     chunks.push({ ...range, text: part });
     text = stitchTranscript(text, part);
   }
-  return { ok: true, transcription: { text, model: TRANSCRIBE_MODEL, chunks } };
+  return { ok: true, transcription: { text, model, chunks } };
 }
