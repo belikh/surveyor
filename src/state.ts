@@ -66,6 +66,7 @@ export async function boot(env: Bindings): Promise<AppState> {
   const additive = [
     "ALTER TABLE corpus_docs ADD COLUMN raw_key TEXT",
     "ALTER TABLE corpus_docs ADD COLUMN reason TEXT",
+    "ALTER TABLE corpus_docs ADD COLUMN retry_after TEXT",
     "ALTER TABLE telemetry ADD COLUMN outcome TEXT",
     "ALTER TABLE reports ADD COLUMN sched_total INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE angles ADD COLUMN flags_json TEXT NOT NULL DEFAULT '[]'",

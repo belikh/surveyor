@@ -54,7 +54,9 @@ Upload documents through the operator API (`POST /api/corpus`). Text files
 parse immediately; PDFs, office files, and images land in held lanes with
 their bytes in R2. `POST /api/corpus/drain` runs the model pass — with no
 capable provider configured, each file stays held with a reason naming the
-capability you need to add.
+capability you need to add. Held bytes live in R2 only for the 24-hour retry
+window: a successful drain deletes them immediately, and the scheduled sweep
+deletes anything no drain reached and records the receipt in `audit`.
 
 ## 4. Running the investigation
 
@@ -67,10 +69,12 @@ capability you need to add.
 
 ## 5. Scheduled digests
 
-The cron trigger (`0 6 * * *`) runs `scheduled()` → `evaluateAll`. Reports
-with a lapsed cadence, crossed per-N threshold, or full-dynamic change
-render through the same gated publish path. Every evaluation writes a
-receipt (`eval_receipts`) — audit them there.
+The cron trigger (`0 6 * * *`) runs `scheduled()`: first the raw-byte
+retention sweep deletes attachment and held-corpus bytes whose retry window
+has lapsed — including files no drain ever reached — and writes a receipt to
+`audit`; then `evaluateAll` renders reports with a lapsed cadence, crossed
+per-N threshold, or full-dynamic change, through the same gated publish path.
+Every evaluation writes a receipt (`eval_receipts`) — audit them there.
 
 Full-dynamic is the risky mode: it re-renders on any new evidence and
 carries a review banner. Poisoned lines are held before any render.

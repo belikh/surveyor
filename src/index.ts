@@ -52,6 +52,7 @@ import launch from "./routes/launch";
 import engine from "./routes/engine";
 import reports from "./routes/reports";
 import { evaluateAll } from "./lib/schedule";
+import { sweepRawBytes } from "./lib/retention";
 import { REQUIRED_SCOPES, REVOCATION_GUIDANCE } from "./lib/scopes";
 import type { Bindings, IngestMessage } from "./env";
 
@@ -903,7 +904,10 @@ export class EngineWorkflow extends WorkflowBaseClass {
 
 export default {
   fetch: app.fetch,
-  // Cron trigger: scheduled digests evaluate on the platform clock.
+  // Cron trigger: scheduled digests evaluate on the platform clock, and the
+  // raw-byte retention sweep enforces the deletion window for held bytes
+  // that no drain reached. The sweep runs first so expired raw material is
+  // gone before any render reads the mirror.
   async scheduled(
     _event: ScheduledEvent,
     env: Bindings,
@@ -911,7 +915,9 @@ export default {
   ): Promise<void> {
     const st = await getState(env);
     const client = await liveClient(env.DB, env);
-    await evaluateAll(env.DB, st.kit, new Date().toISOString(), client);
+    const nowIso = new Date().toISOString();
+    await sweepRawBytes(env, nowIso);
+    await evaluateAll(env.DB, st.kit, nowIso, client);
   },
   // Queue consumer: held corpus docs enqueue here and drain through their
   // lane handler. Failures retry; files stay held with a reason when no

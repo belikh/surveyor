@@ -23,7 +23,9 @@ while OCR runs server-side.
   **private R2 key**. The server vision-OCRs the pages, runs the name-leak gate,
   then **deletes** the raw bytes.
 - **Failure**: a bounded **24 h retry window** keeps the raw pages for retry,
-  then deletes them.
+  then deletes them. The window is enforced by the scheduled raw-byte sweep
+  (`src/lib/retention.ts`, A3), which deletes bytes no drain reached — even
+  when a file never drains at all — and records a deletion receipt.
 - **Limits**: no file-count limit; **50 MB per file**; **200 MB per
   submission**; PDFs, images, docx/xlsx.
 - **Custody**: extracted text joins the submission's **testimony only**,

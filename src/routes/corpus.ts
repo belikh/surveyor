@@ -15,6 +15,7 @@ import {
   gateCorpusText,
   statusFor,
 } from "../lib/ingest";
+import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
 
 export const corpus = new Hono<{ Bindings: Bindings }>();
 
@@ -201,9 +202,17 @@ export async function drainDocById(
     ]);
     if (env.CORPUS) await env.CORPUS.delete(row.raw_key);
   } else {
+    // A failed drain restarts the bounded raw-bytes window; the retention
+    // sweep deletes the bytes if no later drain ever comes.
     await env.DB.prepare(
-      "UPDATE corpus_docs SET reason = ? WHERE id = ?",
-    ).bind(r.outcome.reason, row.id).run();
+      "UPDATE corpus_docs SET reason = ?, retry_after = ? WHERE id = ?",
+    )
+      .bind(
+        r.outcome.reason,
+        new Date(Date.now() + RAW_RETRY_WINDOW_MS).toISOString(),
+        row.id,
+      )
+      .run();
   }
   await recordTurn(env.DB, {
     tier: r.tier,
