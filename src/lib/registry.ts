@@ -13,18 +13,34 @@ import {
 
 export type UsableEntry = ProviderEntry;
 
-export type ProviderCapability = "chat" | "vision" | "search";
+export type ProviderCapability = "chat" | "vision" | "search" | "extract";
+
+/** Search/extract entry kinds. Their nature is the tag: a Tavily or
+ *  Parallel entry is search-capable by kind, so an untagged entry can never
+ *  be spent on a chat call. */
+const SEARCH_KINDS: ReadonlySet<string> = new Set(["tavily", "parallel"]);
 
 /** Capability routing over the registry. Entries are chat-capable unless
- *  tagged for a different transport ("search"); vision and search each
- *  require their tag. One rule for every consumer, so a search entry is
- *  never spent on a chat call and a chat entry is never sent a web query. */
-export function entriesForCapability<T extends { capabilities?: string[] }>(
-  entries: T[],
-  capability: ProviderCapability,
-): T[] {
+ *  they are a search kind or tagged for a different transport; vision,
+ *  search and extract each require their tag (or a search kind). One rule
+ *  for every consumer, so a search entry is never spent on a chat call and
+ *  a chat entry is never sent a web query. */
+export function entriesForCapability<
+  T extends { kind?: string; capabilities?: string[] },
+>(entries: T[], capability: ProviderCapability): T[] {
+  const isSearchKind = (e: T) => SEARCH_KINDS.has(e.kind ?? "");
   if (capability === "chat") {
-    return entries.filter((e) => !(e.capabilities ?? []).includes("search"));
+    return entries.filter(
+      (e) =>
+        !isSearchKind(e) &&
+        !(e.capabilities ?? []).includes("search") &&
+        !(e.capabilities ?? []).includes("extract"),
+    );
+  }
+  if (capability === "search" || capability === "extract") {
+    return entries.filter(
+      (e) => isSearchKind(e) || (e.capabilities ?? []).includes(capability),
+    );
   }
   return entries.filter((e) => (e.capabilities ?? []).includes(capability));
 }

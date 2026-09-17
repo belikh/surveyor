@@ -18,6 +18,7 @@ import {
   resolveChain,
   validateCustomProvider,
 } from "./lib/registry";
+import { probeSearchKey, SEARCH_BASE_URLS } from "./lib/search";
 import {
   putWorkerSecret,
   deleteWorkerSecret,
@@ -470,13 +471,25 @@ app.post("/api/providers/validate", async (c) => {
 const KEY_BASE_URLS: Record<string, string> = {
   groq: "https://api.groq.com/openai/v1",
   tokenrouter: "https://api.tokenrouter.com/v1",
+  tavily: SEARCH_BASE_URLS.tavily,
+  parallel: SEARCH_BASE_URLS.parallel,
 };
+
+/** Search-provider kinds: probed on their own search endpoint (there is no
+ *  OpenAI-style /models call) and tagged search/extract whenever they land. */
+const SEARCH_KEY_KINDS: ReadonlySet<string> = new Set(["tavily", "parallel"]);
 
 const KeyEntrySchema = z.object({
   cf_token: z.string().min(1).max(4096),
   account_id: z.string().min(1).max(64),
   script_name: z.string().min(1).max(128),
-  kind: z.enum(["groq", "tokenrouter", "openai-compatible"]),
+  kind: z.enum([
+    "groq",
+    "tokenrouter",
+    "openai-compatible",
+    "tavily",
+    "parallel",
+  ]),
   label: z.string().min(1).max(64),
   model: z.string().min(1).max(128),
   base_url: z
@@ -502,13 +515,17 @@ app.post("/api/providers/key", async (c) => {
     p.kind === "openai-compatible" ? p.base_url : KEY_BASE_URLS[p.kind];
   if (!baseUrl) return c.json({ error: "base_url_required" }, 422);
 
-  // 1. Prove the key works before storing it (reuses the save-time probe).
-  const check = await validateCustomProvider({
-    label: p.label,
-    baseUrl,
-    model: p.model,
-    apiKey: p.api_key,
-  });
+  // 1. Prove the key works before storing it. Search providers have no
+  //    /models probe; their key is proven on the search endpoint instead.
+  const check: { ok: true } | { ok: false; error: string } =
+    p.kind === "tavily" || p.kind === "parallel"
+      ? await probeSearchKey(p.kind, p.api_key)
+      : await validateCustomProvider({
+          label: p.label,
+          baseUrl,
+          model: p.model,
+          apiKey: p.api_key,
+        });
   if (!check.ok) {
     return c.json({ error: "provider_invalid", detail: check.error }, 422);
   }
@@ -530,15 +547,24 @@ app.post("/api/providers/key", async (c) => {
   // 3. Persist the entry (slot name only) so the chain can resolve it.
   const st = await getState(c.env);
   const current = await st.loadSetup();
+  // Search kinds carry search/extract by nature: a stray tag cannot route
+  // them into the chat chain, and an untagged entry still lands routed.
+  const capabilities = SEARCH_KEY_KINDS.has(p.kind)
+    ? (p.capabilities ?? []).filter(
+        (cap) => cap === "search" || cap === "extract",
+      )
+    : p.capabilities;
+  const storeCaps =
+    SEARCH_KEY_KINDS.has(p.kind) && (capabilities ?? []).length === 0
+      ? ["search", "extract"]
+      : capabilities;
   const entry = {
     kind: p.kind,
     label: p.label,
     secret_slot: p.secret_slot,
     model: p.model,
     ...(p.kind === "openai-compatible" ? { base_url: p.base_url } : {}),
-    ...(p.capabilities && p.capabilities.length > 0
-      ? { capabilities: p.capabilities }
-      : {}),
+    ...(storeCaps && storeCaps.length > 0 ? { capabilities: storeCaps } : {}),
   };
   const providers = [
     ...current.providers.filter((x) => x.secret_slot !== p.secret_slot),
