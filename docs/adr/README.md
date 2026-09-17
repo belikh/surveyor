@@ -94,7 +94,9 @@ the code still falls short of a decision, with the owning ticket.
   tags are entered in the console's provider form, and OAuth consent returns
   its fragment to the surface the flow started from (`/setup` or `/console`).
   The public root is now the survey (the wizard moved to `/setup`, `/corpus`
-  redirects into the console). Remaining: the real-browser driver and CI job
-  for the console check wait on the reopened headless-browser seam (A6, #7)
-  and the deployed trial (A17, #18); the check's steps, receipts and
-  honest-failure modes are covered over the DOM-stub action seam meanwhile.
+  redirects into the console). The headless-browser seam is real: a
+  Playwright/Chromium driver and a CI job (`console-check`) boot the built
+  worker locally and drive the console and the browser PDF path end to end,
+  one receipt per step with a screenshot on failure. Remaining: the check
+  has not run against the deployed trial (A17, #18); A6's (#7) live-browser
+  run folds into that same job.

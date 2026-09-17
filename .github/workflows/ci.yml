@@ -31,3 +31,19 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run smoke:runtime
+
+  # The headless-browser job (#67, widening A6 #7): boots the built worker
+  # in wrangler dev and drives the console and browser PDF path with
+  # Playwright. Emits a receipt per step; a failing step carries a
+  # screenshot artefact in its detail.
+  console-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run console:check

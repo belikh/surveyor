@@ -11,6 +11,8 @@
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
     "smoke:runtime": "bash scripts/runtime-smoke.sh",
+    "build:console-check": "esbuild test/helpers/console-runner.ts --bundle --format=esm --platform=node --external:playwright --outfile=dist/console-check-lib.js --target=node20",
+    "console:check": "npm run build && npm run build:console-check && node scripts/console-check.mjs",
     "bakeoff:build": "esbuild test/helpers/bakeoff.ts --bundle --format=esm --platform=node --external:pdfjs-dist --outfile=dist/bakeoff-lib.js --target=node20",
     "bakeoff:ocr": "npm run bakeoff:build && node scripts/ocr-bakeoff.mjs",
     "quality:build": "esbuild test/helpers/report-quality.ts --bundle --format=esm --platform=node --loader:.sql=text --outfile=dist/report-quality-lib.js --target=node20",
@@ -32,6 +34,7 @@
     "@types/node": "^24.0.0",
     "@types/qrcode": "^1.5.6",
     "esbuild": "^0.25.0",
+    "playwright": "^1.63.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   },

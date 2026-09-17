@@ -3,10 +3,11 @@
 // The checks assert external behaviour only — rendered text, which controls
 // are present or inert, and which flows complete — never driver internals.
 //
-// The real Playwright/CDP driver is A6's (#7) remaining work; until it lands
-// the check runs over the DOM-stub action seam in tests. The driver-absent
-// and actions-absent cases fail honestly: nothing here reports a browser run
-// that did not happen.
+// The real driver is test/helpers/playwright-driver.ts (Playwright/Chromium)
+// and the CI job boots the built worker locally and runs this check via
+// scripts/console-check.mjs. The DOM-stub action seam keeps the per-push
+// suite fast; the driver-absent and actions-absent cases still fail
+// honestly: nothing here reports a browser run that did not happen.
 
 import { fail, pass, type Receipt } from "./smoke";
 import type { BrowserActions, BrowserDriver, BrowserSession } from "./browser";
@@ -49,6 +50,24 @@ async function waitForText(
     if (text.includes(needle)) return text;
     if (Date.now() >= deadline) {
       throw new Error(`"${needle}" not found in ${selector} within ${timeoutMs}ms`);
+    }
+    await sleep(100);
+  }
+}
+
+/** Wait for a native dialog the handler recorded, never a fixed sleep: a
+ *  publish does real work (evidence, sealing) before it answers. */
+async function waitForDialog(
+  dialogs: string[],
+  prefix: string,
+  timeoutMs: number,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const found = dialogs.find((d) => d.startsWith(prefix));
+    if (found) return found;
+    if (Date.now() >= deadline) {
+      throw new Error(`no ${prefix} dialog within ${timeoutMs}ms`);
     }
     await sleep(100);
   }
@@ -186,34 +205,49 @@ export async function runConsoleBrowserCheck(
     await step("console:angle-review", async () => {
       await actions.click('a[href="#engine"]');
       await actions.fill('[data-field="angle-topics"]', TOPICS);
-      await actions.click('[data-action="angle-propose"]');
-      try {
-        await actions.waitFor('[data-action="angle-review-approve"]', 2_000);
-        await actions.click('[data-action="angle-review-approve"]');
-      } catch {
-        await actions.waitFor('[data-action="angle-approve"]', 5_000);
-        await actions.click('[data-action="angle-approve"]');
+      // Local D1 can serve a stale read just after a write; an operator
+      // would press Propose again. Retry rather than assert on one read.
+      let clicked = false;
+      const deadline = Date.now() + 20_000;
+      while (!clicked && Date.now() < deadline) {
+        await actions.click('[data-action="angle-propose"]');
+        await sleep(1_000);
+        for (const selector of [
+          '[data-action="angle-review-approve"]',
+          '[data-action="angle-approve"]',
+        ]) {
+          try {
+            await actions.waitFor(selector, 1_000);
+            clicked = true;
+            await actions.click(selector);
+            break;
+          } catch {
+            // Not queued yet; retry.
+          }
+        }
       }
+      if (!clicked) throw new Error("no angle appeared in the queue to approve");
       await waitForText(actions, "#app", "approved", 15_000);
       return "an angle was proposed, reviewed if held, and approved";
     });
 
     await step("console:publish-refused-honestly", async () => {
       await actions.click('a[href="#reports"]');
+      // The report panels are collapsible; open the briefing one before
+      // touching its controls. The console keeps it open across re-renders.
+      await actions.click('summary[data-report="briefing"]');
       await actions.waitFor('[data-action="report-publish"]');
       dialogs.length = 0;
       await actions.click('[data-action="report-publish"][data-type="briefing"]');
-      await sleep(500);
-      const confirmation = dialogs.find((d) => d.startsWith("confirm:"));
-      if (!confirmation) throw new Error("publish fired without a confirmation");
+      const confirmation = await waitForDialog(dialogs, "confirm:", 5_000);
       if (!/version \d+/.test(confirmation)) {
         throw new Error(`the confirmation did not name the pending version: ${confirmation}`);
       }
       // The gates are unmet on a fresh fixture report: the refusal must
       // surface as an alert carrying the API's error token, never a silent
       // pass.
-      const refusal = dialogs.find((d) => d.startsWith("alert:"));
-      if (!refusal || !/Publish refused/.test(refusal)) {
+      const refusal = await waitForDialog(dialogs, "alert:", 30_000);
+      if (!/Publish refused/.test(refusal)) {
         throw new Error("the publish refusal was not surfaced");
       }
       return "confirmation fired, refusal surfaced";
@@ -222,6 +256,7 @@ export async function runConsoleBrowserCheck(
     await step("console:confirmed-publish", async () => {
       // Satisfy the report's gates through the console — approval, legal
       // review, one right-of-reply attempt — then publish for real.
+      dialogs.length = 0;
       await actions.click('[data-action="report-approve"][data-type="briefing"]');
       await actions.fill(
         '[data-field="legal-reviewer"][data-type="briefing"]',
@@ -237,9 +272,36 @@ export async function runConsoleBrowserCheck(
         "Email",
       );
       await actions.click('[data-action="report-reply"][data-type="briefing"]');
+      // Confirm the recorded attempt through the legal surface (what an
+      // operator would read) before publishing: re-read until it surfaces,
+      // because a stale first read must not cause a spurious gate refusal.
+      let surfaced = false;
+      const legalDeadline = Date.now() + 20_000;
+      while (!surfaced && Date.now() < legalDeadline) {
+        await actions.click('[data-action="report-legal-read"][data-type="briefing"]');
+        await sleep(500);
+        const surface = await actions.readText(
+          '[data-field="legal-surface"][data-type="briefing"]',
+        );
+        surfaced = surface.includes("awaiting");
+      }
+      if (!surfaced) {
+        throw new Error("the legal surface never showed the recorded reply attempt");
+      }
       await actions.click('[data-action="report-publish"][data-type="briefing"]');
-      await waitForText(actions, "#app", "briefing \u2014 v1", 20_000);
-      return "gates satisfied through the console; version 1 published";
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const text = await actions.readText("#app");
+        if (text.includes("briefing \u2014 v1")) {
+          return "gates satisfied through the console; version 1 published";
+        }
+        const alert = dialogs.find((d) => d.startsWith("alert:"));
+        if (alert) throw new Error(`publish failed: ${alert}`);
+        if (Date.now() >= deadline) {
+          throw new Error('"briefing — v1" not found within 20s');
+        }
+        await sleep(200);
+      }
     });
   } finally {
     try {

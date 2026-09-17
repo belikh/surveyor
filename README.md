@@ -59,6 +59,7 @@ smoke → teardown end to end.
 | `npm run typecheck` | TypeScript, strict |
 | `npm run build` | Worker bundle + smoke helper |
 | `npm run smoke:runtime` | Boot workerd locally: HTTP surface + queue, Workflow and R2 primitives |
+| `npm run console:check` | Boot workerd locally and drive the console with headless Chromium (Playwright), one receipt per step |
 | `npm run smoke -- <url> [--token t]` | Smoke a deployed installation |
 
 ## Security testing (Niro)

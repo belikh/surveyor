@@ -34,7 +34,7 @@ let TOKEN = "";
 let CF_TOKEN = "";
 let STATUS = null;
 let statusNode = null;
-const STATE = { openSubmission: null, openLine: null };
+const STATE = { openSubmission: null, openLine: null, openReport: null };
 // Sections in navigation order; #home is the default.
 const SECTIONS = [
   ["home", "Home"],
@@ -855,7 +855,13 @@ async function paintReports(body) {
   } catch (e) { l.fail(e); }
 }
 function reportPanel(t) {
-  const details = el("details", {}, el("summary", { text: t.type + " \\u2014 v" + t.current_version + (t.enabled ? "" : " (disabled)") }));
+  const summary = el("summary", { text: t.type + " \\u2014 v" + t.current_version + (t.enabled ? "" : " (disabled)"), "data-report": t.type });
+  summary.onclick = () => { STATE.openReport = t.type; };
+  const details = el("details", { "data-report": t.type }, summary);
+  if (STATE.openReport === t.type) {
+    details.open = true;
+    details.setAttribute("open", "");
+  }
   const enabled = el("input", { type: "checkbox" });
   enabled.checked = !!t.enabled;
   const frequency = select(["manual", "scheduled", "per-n", "full-dynamic"], t.frequency);
@@ -941,7 +947,7 @@ function reportPanel(t) {
   });
   recordLegal.setAttribute("data-action", "report-legal");
   recordLegal.setAttribute("data-type", t.type);
-  const legalBody = el("div", {});
+  const legalBody = el("div", { "data-field": "legal-surface", "data-type": t.type });
   const loadLegal = btn("Read legal surface", async () => {
     try {
       const surface = await api("/api/reports/" + t.type + "/legal");
@@ -952,6 +958,8 @@ function reportPanel(t) {
           surface.replies.map((r) => [r.outcome, r.subject, r.attempted_at])));
     } catch (e) { legalNote.textContent = "Failed: " + errorText(e); }
   });
+  loadLegal.setAttribute("data-action", "report-legal-read");
+  loadLegal.setAttribute("data-type", t.type);
   details.append(panel(strong("Legal gate (right of reply)"),
     field("Reviewer", reviewer), el("label", {}, replyRequired, " right of reply required"),
     field("Notes", legalNotes), el("div", { class: "os9-row" }, recordLegal, loadLegal), legalNote, legalBody));
