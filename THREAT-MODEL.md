@@ -83,7 +83,8 @@ bucket** until drained.
   the operator's account; the key is a random doc id; no application logging of
   file contents; raw bytes are deleted on successful drain; the scheduled
   raw-byte sweep (`src/lib/retention.ts`, A3) deletes anything no drain reached
-  once the 24 h retry window lapses and records a deletion receipt in `audit`; a
+  once the configured retention window lapses (24 h by default; per-category
+  and bounded, D1 #44) and records a deletion receipt in `audit`; a
   lifecycle rule must abort incomplete multipart uploads; failed files stay held
   with a reason and are operator-deletable.
 - **Residual risk**: the window between upload and drain exposes raw bytes to

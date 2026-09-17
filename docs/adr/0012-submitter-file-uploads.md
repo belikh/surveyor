@@ -31,6 +31,10 @@ while OCR runs server-side.
   then deletes them. The window is enforced by the scheduled raw-byte sweep
   (`src/lib/retention.ts`, A3), which deletes bytes no drain reached — even
   when a file never drains at all — and records a deletion receipt.
+  **Amendment (2026-09-17)**: the window is per data category and
+  operator-configurable with safe defaults and bounds (D1, #44); the default
+  remains 24 h, and categories that are the investigation's record are
+  retained rather than swept.
 - **Limits**: no file-count limit; **50 MB per file**; **200 MB per
   submission**; PDFs, images, docx/xlsx/pptx (amended 2026-09-17:
   `attachmentLane` also accepts pptx).

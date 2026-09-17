@@ -63,9 +63,13 @@ Upload documents through the operator API (`POST /api/corpus`). Text files
 parse immediately; PDFs, office files, and images land in held lanes with
 their bytes in R2. `POST /api/corpus/drain` runs the model pass — with no
 capable provider configured, each file stays held with a reason naming the
-capability you need to add. Held bytes live in R2 only for the 24-hour retry
+capability you need to add. Held bytes live in R2 only for their retention
 window: a successful drain deletes them immediately, and the scheduled sweep
-deletes anything no drain reached and records the receipt in `audit`.
+deletes anything no drain reached and records the receipt in `audit`. The
+window is 24 hours by default and configurable per category with `GET
+/api/retention` and `PUT /api/retention` (whole hours, bounded — a request
+outside the bounds, or for a category that is retained as the investigation's
+record, is refused with a reason).
 
 ## 4. Running the investigation
 
@@ -79,9 +83,10 @@ deletes anything no drain reached and records the receipt in `audit`.
 ## 5. Scheduled digests
 
 The cron trigger (`0 6 * * *`) runs `scheduled()`: first the raw-byte
-retention sweep deletes attachment and held-corpus bytes whose retry window
-has lapsed — including files no drain ever reached — and writes a receipt to
-`audit`; then `evaluateAll` renders reports with a lapsed cadence, crossed
+retention sweep deletes attachment and held-corpus bytes whose configured
+window has lapsed — including files no drain ever reached — and writes a
+receipt to `audit`, naming the windows it enforced; then `evaluateAll`
+renders reports with a lapsed cadence, crossed
 per-N threshold, or full-dynamic change, through the same gated publish path.
 Every evaluation writes a receipt (`eval_receipts`) — audit them there.
 
@@ -177,3 +182,7 @@ each names the claim that changed.
   touched" after using a scoped token. Rotation is deliberate, requires
   resealing existing rows, and a needless rotation is what orphans sealed
   data; the line now warns against it.
+- **2026-09-17** — the retention window was stated as a fixed 24 hours. It is
+  per data category with safe defaults and bounds (D1, #44): the default is
+  unchanged, the operator configures it through `GET/PUT /api/retention`, and
+  the sweep receipt names the windows it enforced.

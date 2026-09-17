@@ -66,6 +66,7 @@ import engine from "./routes/engine";
 import reports from "./routes/reports";
 import breach from "./routes/breach";
 import notices from "./routes/notices";
+import retention from "./routes/retention";
 import { evaluateAll } from "./lib/schedule";
 import { sweepRawBytes } from "./lib/retention";
 import { REQUIRED_SCOPES, REVOCATION_GUIDANCE } from "./lib/scopes";
@@ -265,6 +266,15 @@ app.use("/api/notices/*", async (c, next) => {
   await next();
 });
 app.route("/api/notices", notices);
+
+// Retention windows decide when evidence-bearing raw bytes are deleted, so
+// both reading and updating them are operator-only.
+app.use("/api/retention/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/retention", retention);
 
 // Launch pack: generation and rotation are operator-only; the slug
 // landing page is public (it is the survey's front door).

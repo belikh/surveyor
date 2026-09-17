@@ -172,6 +172,16 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS ix_attachments_submission ON attachments(submission_id);
 
+-- Retention windows per data category (D1, #44). One row; an absent row
+-- means the safe defaults apply. Windows are milliseconds; the API speaks
+-- whole hours. Categories that are the investigation's record are retained
+-- and have no row here — a window for them is refused with a reason.
+CREATE TABLE IF NOT EXISTS retention_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  config_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Breach assessments (Privacy Act Part IIIC). The facts and decision are
 -- sealed in record_envelope; aware_at and decision stay plaintext so the
 -- thirty-day assessment clock (s 26WH) is queryable without opening it.
