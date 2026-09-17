@@ -15,3 +15,8 @@ export const MIRROR_STATUSES = [
 export const MIRRORED_SQL = `status IN (${MIRROR_STATUSES.map(
   (s) => `'${s}'`,
 ).join(", ")})`;
+
+/** Whether a drain outcome settles a document (mirrored, citable, countable). */
+export function isSettledStatus(status: string): boolean {
+  return (MIRROR_STATUSES as readonly string[]).includes(status);
+}

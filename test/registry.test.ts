@@ -111,6 +111,20 @@ describe("entriesForCapability", () => {
       "finder",
     ]);
   });
+
+  it("treats an audio tag as additive: the entry keeps its chat turn", () => {
+    // A search tag moves an entry to a different transport, so chat never
+    // spends it. An audio tag names a sibling endpoint on the same service,
+    // so the entry stays chat-capable (and only audio-tagged entries
+    // receive audio chunks).
+    const audio = entry({ label: "ears", capabilities: ["audio"] });
+    expect(entriesForCapability([audio], "chat").map((e) => e.label)).toEqual([
+      "ears",
+    ]);
+    expect(entriesForCapability([audio], "audio").map((e) => e.label)).toEqual([
+      "ears",
+    ]);
+  });
 });
 
 describe("reorderProviders", () => {

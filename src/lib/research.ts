@@ -289,14 +289,15 @@ export async function liveLoop(
     tier: client.tier,
     steps,
   });
+  function spendCapReason(used: number, cap: number): string {
+    return `spend cap reached (${used} of ${cap} tokens)`;
+  }
   while (true) {
     if (steps >= caps.steps || tokens >= caps.tokens) {
       return capped(`caps exhausted after ${steps} step(s)`);
     }
     if (spendUsed >= budget.spendCap) {
-      return capped(
-        `spend cap reached (${spendUsed} of ${budget.spendCap} tokens)`,
-      );
+      return capped(spendCapReason(spendUsed, budget.spendCap));
     }
     if (now() - started >= caps.wallMs) {
       return capped(`wall-time budget exhausted after ${steps} step(s)`);
@@ -322,9 +323,7 @@ export async function liveLoop(
     // The call just paid for pushed the line to its cap: halt here, before
     // another turn is bought, even if this turn carried a final action.
     if (spendUsed >= budget.spendCap) {
-      return capped(
-        `spend cap reached (${spendUsed} of ${budget.spendCap} tokens)`,
-      );
+      return capped(spendCapReason(spendUsed, budget.spendCap));
     }
     let action: z.infer<typeof ActionSchema>;
     try {

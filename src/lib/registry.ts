@@ -26,8 +26,11 @@ export type ProviderCapability =
 const SEARCH_KINDS: ReadonlySet<string> = new Set(["tavily", "parallel"]);
 
 /** Capability routing over the registry. Entries are chat-capable unless
- *  they are a search kind or tagged for a different transport; vision,
- *  search, extract and audio each require their tag (or a search kind). One
+ *  they are a search kind or tagged search/extract — those are different
+ *  transports, and an untagged entry can never be spent on them. Vision and
+ *  audio tags are additive: both ride the chat-completions transport's
+ *  entry (images) or a sibling endpoint on the same openai-compatible
+ *  service, so tagging an entry `audio` does not remove its chat turn. One
  *  rule for every consumer, so a search entry is never spent on a chat
  *  call, a chat entry is never sent a web query, and only an audio-tagged
  *  entry receives an audio chunk. */

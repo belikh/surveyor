@@ -21,6 +21,7 @@ import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
 import type { QuarantineHit } from "../lib/intake";
 import { delimitedToText } from "../lib/tables";
 import { storeBody } from "../lib/upload";
+import { isSettledStatus } from "../lib/mirror";
 import {
   captureRecordingProvenance,
   isRecordingLane,
@@ -281,7 +282,7 @@ export async function drainDocById(
   const r = results[0];
   if (!r) return { status: "ignored", reason: "no handler for lane" };
 
-  if (["parsed", "OCRed", "rescued", "transcribed"].includes(r.outcome.status)) {
+  if (isSettledStatus(r.outcome.status)) {
     const sealedNames = await Promise.all(
       r.outcome.hits.map(async (h, i) => ({
         label: `[corpus-name ${i + 1}]`,
@@ -349,9 +350,7 @@ corpus.post("/drain", async (c) => {
     outcomes.push({ id: r.id, ...out });
   }
   return c.json({
-    drained: outcomes.filter((o) =>
-      ["parsed", "OCRed", "rescued", "transcribed"].includes(o.status),
-    ).length,
+    drained: outcomes.filter((o) => isSettledStatus(o.status)).length,
     outcomes,
   });
 });

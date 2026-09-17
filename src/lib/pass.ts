@@ -183,10 +183,15 @@ export async function runJournalistPass(
   if (type === "timeline") {
     // Stored entries are the timeline's source of truth and re-render
     // deterministically, so the publish-time marker review cannot un-store
-    // them: a marker anywhere in the pass rejects the whole output before
-    // anything is written, exactly as it rejects any other report's prose.
-    const flagged = (parsed.entries ?? []).some(
-      (e) => injectionFlags(`${e.label}\n${e.paragraph}`).length > 0,
+    // them: a marker anywhere in the pass — prose or a citation snippet,
+    // which renders verbatim — rejects the whole output before anything is
+    // written, exactly as it rejects any other report's prose.
+    const flagged = (parsed.entries ?? []).some((e) =>
+      injectionFlags(
+        [e.label, e.paragraph, ...e.citations.map((c) => c.snippet)].join(
+          "\n",
+        ),
+      ).length > 0,
     );
     if (flagged) {
       await recordTurn(db, {
@@ -281,13 +286,21 @@ export async function readTimelineEntries(
 }
 
 /** Render the stored timeline entries, or null when none are stored so the
- *  caller can fall back to the deterministic evidence render. */
+ *  caller can fall back to the deterministic evidence render. `strict` is
+ *  publish mode (ADR-0010): entries with no citation were draft annotations
+ *  and are stripped from the render, never published — unless the operator
+ *  approved uncited material. Storage is untouched: a re-render cannot
+ *  rewrite the operator's edited entries. */
 export async function renderStoredTimeline(
   db: D1Database,
   kit: VaultKit,
+  opts: { strict?: boolean } = {},
 ): Promise<string | null> {
   const entries = await readTimelineEntries(db, kit);
-  return entries.length === 0 ? null : renderTimelineEntries(entries);
+  const rendered = opts.strict
+    ? entries.filter((e) => e.citations.length > 0)
+    : entries;
+  return rendered.length === 0 ? null : renderTimelineEntries(rendered);
 }
 
 /** Replace this type's stored entries with the pass output (sealed). */

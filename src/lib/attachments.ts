@@ -15,6 +15,7 @@ import {
 import { recordTurn } from "./telemetry";
 import { runDrain, type HeldDoc } from "./drain";
 import { buildLaneHandlers } from "./lanes";
+import { isSettledStatus } from "./mirror";
 
 export const ATTACH_MAX_BYTES = 50 * 1024 * 1024;
 export const ATTACH_TOTAL_BYTES = 200 * 1024 * 1024;
@@ -143,7 +144,7 @@ export async function drainAttachmentById(
     return { status: "rejected", reason: "no lane handler" };
   }
 
-  if (["parsed", "OCRed", "rescued", "transcribed"].includes(r.outcome.status)) {
+  if (isSettledStatus(r.outcome.status)) {
     const seqRow = await env.DB.prepare(
       "SELECT MAX(seq) AS maxSeq FROM messages WHERE submission_id = ?",
     )

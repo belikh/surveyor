@@ -56,6 +56,7 @@ import {
   drainAttachmentById,
 } from "../lib/attachments";
 import { storeBody } from "../lib/upload";
+import { isSettledStatus } from "../lib/mirror";
 
 type Env = { Bindings: Bindings };
 
@@ -468,9 +469,7 @@ intake.post("/:id/attachments/drain", async (c) => {
     outcomes.push({ id: row.id, ...(await drainAttachmentById(c.env, row.id)) });
   }
   return c.json({
-    drained: outcomes.filter((o) =>
-      ["parsed", "OCRed", "rescued"].includes(o.status),
-    ).length,
+    drained: outcomes.filter((o) => isSettledStatus(o.status)).length,
     outcomes,
   });
 });

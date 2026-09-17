@@ -48,7 +48,11 @@ the code still falls short of a decision, with the owning ticket.
   #23), the browser rasterisation path ships with the served PDF.js worker
   asset (A5, #6), and the dependency-free parser choice is recorded in 0002's
   amendment. The headless-browser check runs against an in-process seam (A6,
-  #7); a real-browser driver run waits on the deployed trial (A17, #18).
+  #7, reopened); a real-browser driver run waits on the deployed trial (A17,
+  #18). Transcription provenance is partial (C6, #37): per-chunk timing and
+  the tier are recorded, but detected language, segment confidence and the
+  model version are not — they need a live Workers AI run to confirm what the
+  binding returns.
 - **0003** — research lines research autonomously within their caps (B1 #19,
   B2 #20, B3 #21): read-only corpus tools, real spend metered, and findings
   held when flagged. Angles default to the deterministic proposer unless the

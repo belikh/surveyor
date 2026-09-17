@@ -133,6 +133,9 @@ export async function publishReportVersion(
 
   const deterministic = RENDERERS[type](evidence);
   let body = deterministic.body;
+  // Publish mode unless the operator approved uncited material: uncited
+  // claims are stripped from every surface a version can carry.
+  const strict = !row.config.allow_uncited;
   if (client) {
     // Journalist pass (R7/B12): the Workflow's memoised pass output is
     // reused as-is; only an absent cache entry runs the pass inline (the
@@ -147,7 +150,7 @@ export async function publishReportVersion(
             type,
             client,
             evidence,
-            !row.config.allow_uncited,
+            strict,
             PASS_CAPS,
           )
         : cached;
@@ -172,9 +175,10 @@ export async function publishReportVersion(
   }
   // Timeline (ADR-0010): stored structured entries are the report's source
   // of truth and render deterministically, so a re-render cannot rewrite
-  // the operator's edited entries.
+  // the operator's edited entries. Strict renders strip the draft's
+  // uncited annotations: a cached-null pass cannot publish them either.
   if (type === "timeline") {
-    const stored = await renderStoredTimeline(db, kit);
+    const stored = await renderStoredTimeline(db, kit, { strict });
     if (stored !== null) body = stored;
   }
   const withBanner = banner ? `${banner}\n\n${body}` : body;
