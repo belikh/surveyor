@@ -49,9 +49,9 @@ fix is on its stream branch and lands when the campaign merges.
   PDF.js worker asset (A5, #6). The wizard does not yet ask for capability tags
   (B5, #23). The two-page multi-modal rescue is not built (superseded by
   ADR-0011).
-- **0002 / 0012** — uploads buffer rather than stream: submitter attachments
-  call `arrayBuffer()` (A14, #15) and corpus uploads arrive as base64 JSON
-  bodies (A15, #16).
+- **0002 / 0012** — corpus uploads arrive as base64 JSON bodies rather than
+  streams (A15, #16); submitter attachments stream through the Worker into R2
+  (A14, #15).
 - **0003** — research lines exist with citation validation and spend caps but do
   not research autonomously; a line completes through the operator's findings
   POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding
@@ -67,7 +67,7 @@ fix is on its stream branch and lands when the campaign merges.
   been exercised against a live Cloudflare account (A16, #17; A17, #18), and
   re-provisioning is not yet non-destructive (A2, #3).
 - **0012** — the raw-byte deletion window is enforced by the scheduled sweep
-  (A3, #4); streamed uploads are outstanding (A14, #15).
+  (A3, #4) and submitter attachments stream into R2 (A14, #15).
 - **0015** — angles still queue for explicit approval rather than
   auto-approving unless flagged (B-series engine build, #19–#21), and it is the
   scheduled digest that still auto-publishes where gates are met (see 0004).

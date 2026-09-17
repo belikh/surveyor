@@ -6,6 +6,7 @@ import { solveChallenge } from "../src/lib/pow";
 import { sealText, openText } from "../src/lib/vault";
 import { boot } from "../src/state";
 import {
+  ATTACH_MAX_BYTES,
   ATTACH_TOTAL_BYTES,
   drainAttachmentById,
   attachmentBytes,
@@ -75,6 +76,55 @@ async function upload(
   });
 }
 
+/** Chunked framing: a stream body carries no content-length, and the route
+ *  must not reach for `arrayBuffer()` — that is the buffering seam. */
+async function streamedUpload(
+  env: Record<string, unknown>,
+  id: string,
+  code: string,
+  chunks: Uint8Array[],
+  filename = "scan.png",
+) {
+  let i = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (i < chunks.length) controller.enqueue(chunks[i++]);
+      else controller.close();
+    },
+  });
+  const init = {
+    method: "POST",
+    headers: {
+      "x-access-code": code,
+      "x-filename": encodeURIComponent(filename),
+      "content-type": "image/png",
+    },
+    body,
+    duplex: "half",
+  } as RequestInit;
+  const req = new Request(
+    `https://surveyor.example/api/intake/${id}/attachments`,
+    init,
+  );
+  Object.defineProperty(req, "arrayBuffer", {
+    value: () => {
+      throw new Error("request body was buffered");
+    },
+  });
+  return app.fetch(req, env as never);
+}
+
+class RecordingR2 extends FakeR2 {
+  streamed: boolean[] = [];
+  override async put(
+    key: string,
+    value: Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>,
+  ): Promise<void> {
+    this.streamed.push(value instanceof ReadableStream);
+    return super.put(key, value);
+  }
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -98,6 +148,64 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     expect(row.filename.startsWith("v1.")).toBe(true);
   });
 
+  it("streams a chunked body without buffering and records the streamed size", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    const chunks = [
+      new TextEncoder().encode("fake-im"),
+      new TextEncoder().encode("age-"),
+      new TextEncoder().encode("bytes"),
+    ];
+    const res = await streamedUpload(env, id, code, chunks);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string; status: string };
+    expect(body.status).toBe("uploaded");
+    const row = (await (env.DB as FakeD1)
+      .prepare("SELECT size_bytes FROM attachments WHERE id = ?")
+      .bind(body.id)
+      .first()) as { size_bytes: number };
+    expect(row.size_bytes).toBe(16);
+    const stored = await (env.CORPUS as FakeR2).get(
+      `attachments/${id}/${body.id}`,
+    );
+    expect(
+      new TextDecoder().decode(await stored!.arrayBuffer()),
+    ).toBe("fake-image-bytes");
+  });
+
+  it("streams a fifty megabyte upload without buffering the body", async () => {
+    const r2 = new RecordingR2();
+    const env = makeEnv({ CORPUS: r2 as never });
+    const { id, code } = await createSubmission(env);
+    const chunks = Array.from({ length: 50 }, () => new Uint8Array(1024 * 1024));
+    const res = await streamedUpload(
+      env,
+      id,
+      code,
+      chunks,
+      "big.bin",
+    );
+    expect(res.status).toBe(201);
+    // The object store received a stream, not an arrayBuffer: the 50 MB
+    // body never sat in isolate memory.
+    expect(r2.streamed).toEqual([true]);
+    const row = (await (env.DB as FakeD1)
+      .prepare("SELECT size_bytes FROM attachments")
+      .first()) as { size_bytes: number };
+    expect(row.size_bytes).toBe(ATTACH_MAX_BYTES);
+  });
+
+  it("refuses an over-cap streamed body and leaves no object behind", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    const chunks = Array.from({ length: 50 }, () => new Uint8Array(1024 * 1024));
+    chunks.push(new Uint8Array([1]));
+    const res = await streamedUpload(env, id, code, chunks, "bigger.bin");
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { error: string }).error).toBe("too_large");
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
   it("rejects unsupported types and quota-exceeding submissions", async () => {
     const env = makeEnv();
     const { id, code } = await createSubmission(env);
@@ -115,6 +223,8 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     const over = await upload(env, id, code, "tiny");
     expect(over.status).toBe(413);
     expect(((await over.json()) as { error: string }).error).toBe("quota_exceeded");
+    // The rejected upload deleted the object it streamed.
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
   });
 
   it("OCRs on drain, appends sealed testimony, deletes the raw, and never mirrors", async () => {
