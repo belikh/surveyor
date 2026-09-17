@@ -21,6 +21,8 @@ export type SetupPhase = z.infer<typeof SetupPhase>;
 export const PROVIDER_SLOTS: ReadonlySet<string> = new Set([
   "GROQ_API_KEY",
   "TOKENROUTER_API_KEY",
+  "TAVILY_API_KEY",
+  "PARALLEL_API_KEY",
 ]);
 
 export function isProviderSlot(slot: string): boolean {
@@ -30,13 +32,20 @@ export function isProviderSlot(slot: string): boolean {
 export const ProviderEntrySchema = z
   .object({
     /** Registry name (e.g. "groq") or "custom" for OpenAI-compatible. */
-    kind: z.enum(["groq", "tokenrouter", "openai-compatible"]),
+    kind: z.enum([
+      "groq",
+      "tokenrouter",
+      "openai-compatible",
+      "tavily",
+      "parallel",
+    ]),
     label: z.string().min(1).max(64),
     /** Never a key value — the secret slot name it was written to. */
     secret_slot: z.string().min(1).max(64),
     model: z.string().min(1).max(128),
     base_url: z.string().url().optional(),
-    /** Declared abilities, e.g. ["vision"], so lanes route correctly. */
+    /** Declared abilities, e.g. ["vision"] or ["search"], so lanes and the
+     *  engine route correctly; entries without a tag are chat entries. */
     capabilities: z.array(z.string().min(1).max(32)).max(8).optional(),
   })
   .superRefine((p, ctx) => {

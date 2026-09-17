@@ -140,6 +140,35 @@ describe("destination policy (A12, #13)", () => {
   });
 });
 
+describe("capability routing", () => {
+  it("never spends a chat call on a search-tagged entry", async () => {
+    const mixed: ChainEntry[] = [
+      {
+        kind: "tavily",
+        label: "find",
+        secret_slot: "TAVILY_API_KEY",
+        model: "search",
+        capabilities: ["search"],
+      },
+      {
+        kind: "openai-compatible",
+        label: "chat",
+        secret_slot: "GROQ_API_KEY",
+        model: "m",
+        base_url: "https://a.example/v1",
+      },
+    ];
+    let calls = 0;
+    const client = buildChainClient(mixed, () => "k", async () => {
+      calls++;
+      return completion("chat!");
+    });
+    expect(await client.complete("hi")).toBe("chat!");
+    expect(calls).toBe(1);
+    expect(client.tier).toBe("chat");
+  });
+});
+
 describe("vision capability routing", () => {
   it("only sends images to vision-tagged entries", async () => {
     const plain = buildChainClient(entries, read, async () => completion("img"));

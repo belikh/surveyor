@@ -316,7 +316,7 @@ describe("Workflow entry", () => {
     await getState(env as never);
     await (env.DB as FakeD1)
       .prepare(
-        "INSERT INTO reports (type, config_json, status, enabled, corroborations, pending_topics_json, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('briefing', '{}', 'draft', 1, 0, '[]', 0, 0, 0, NULL, ?)",
+        "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('briefing', '{}', 'draft', 1, 0, 0, 0, NULL, ?)",
       )
       .bind(new Date().toISOString())
       .run();

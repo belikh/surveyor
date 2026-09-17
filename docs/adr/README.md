@@ -12,7 +12,7 @@ agency, honest threat modelling, corpus purity, Australian English
 | [0001](0001-tenant-isolation-and-byok.md) | One investigation per installation; BYOK provider registry; degraded keyless mode | wayfinder `t01-tenant-byok` |
 | [0002](0002-corpus-ingestion-and-ocr.md) | Async ingestion lanes, vision OCR, multi-modal rescue, pre-mirror name-leak gate | wayfinder `t03-corpus-ocr` |
 | [0003](0003-digest-angles-and-research-engine.md) | LLM-proposed grounded angles, capped research lines, ledger-backed retrigger, flag-and-gate | wayfinder `t04-digest-research` |
-| [0004](0004-report-outputs-and-publish-gates.md) | Five report types, manual-first gates, four frequencies, two-tier rewrites, append-only history | wayfinder `t05-report-gates` |
+| [0004](0004-report-outputs-and-publish-gates.md) | Five report types, manual-first gates, four frequencies, append-only history (two-tier rewrites retired 2026-09-17) | wayfinder `t05-report-gates` |
 | [0005](0005-installer-and-uninstaller.md) | Two-phase install (deploy button + scoped-token fallback), wizard is code, honest teardown receipt | wayfinder `t02-installer` |
 | [0006](0006-launch-pack.md) | Seven-asset launch pack, URL-only QR, regenerable, zero operator identity | wayfinder `t06-launch-pack` |
 | [0007](0007-ai-sdk-registry.md) | Provider registry implemented on the Vercel AI SDK (`ai@7` + `@ai-sdk/openai-compatible@3`) | remediation R2 |

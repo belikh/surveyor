@@ -17,7 +17,6 @@ function ev(): Evidence {
     addenda: 2,
     corpusDocs: 5,
     heldDocs: 1,
-    corroborations: 4,
     angles: [
       { title: "Angle: roster", exhibits: [{ doc_id: "d1", snippet: "late" }] },
     ],
@@ -108,7 +107,7 @@ describe("renderers", () => {
     const s = renderSnapshot(ev());
     expect(s.body).toContain("12");
     expect(s.body).toContain("5");
-    expect(s.body).toContain("4");
+    expect(s.body).toContain("Citations: 1");
   });
 
   it("long-form marks its scaffold honestly", () => {

@@ -127,29 +127,33 @@ describe("report routes", () => {
     expect(versions.versions.map((v) => v.version)).toEqual([1, 2]);
   });
 
-  it("ticks corroborations but routes substance to a journalist pass", async () => {
+  it("retires the dormant two-tier tick route and its dead schema", async () => {
     const env = makeEnv();
     await seedEvidence(env);
-    const tick = (await (
-      await callApp(env, "/api/reports/briefing/tick", {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ new_topics: [], corroborations: 3 }),
-      })
-    ).json()) as Record<string, unknown>;
-    expect(tick.action).toBe("ticked");
-    expect(tick.corroborations).toBe(3);
+    const tick = await callApp(env, "/api/reports/briefing/tick", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ new_topics: ["pay"], corroborations: 1 }),
+    });
+    expect(tick.status).toBe(404);
 
-    const substantial = (await (
-      await callApp(env, "/api/reports/briefing/tick", {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ new_topics: ["pay"], corroborations: 1 }),
-      })
+    // The draft no longer advertises a pending-topics queue.
+    const draft = (await (
+      await callApp(env, "/api/reports/briefing/draft", { headers: auth })
     ).json()) as Record<string, unknown>;
-    expect(substantial.action).toBe("journalist_pass_required");
-    // Corroboration count untouched by the refused tick.
-    expect(substantial.corroborations).toBe(3);
+    expect(draft.pending_topics).toBeUndefined();
+
+    // The reports table carries neither of the retired columns.
+    const raw = (await (env.DB as FakeD1)
+      .prepare("PRAGMA table_info(reports)")
+      .all()) as unknown;
+    const names = (
+      Array.isArray(raw)
+        ? raw
+        : (raw as { results: Array<{ name: string }> }).results
+    ).map((c) => c.name);
+    expect(names).not.toContain("pending_topics_json");
+    expect(names).not.toContain("corroborations");
   });
 
   it("rejects unknown report types", async () => {

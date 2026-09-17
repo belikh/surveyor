@@ -17,6 +17,7 @@ import {
   type CorpusDoc,
 } from "./engine";
 import { isAllowedProviderBaseUrl } from "./net";
+import { entriesForCapability } from "./registry";
 
 export interface ModelClient {
   tier: string;
@@ -204,9 +205,8 @@ export function buildChainClient(
   secrets: (slot: string) => string | undefined,
   fetchImpl: typeof fetch = fetch,
 ): ModelClient {
-  const visionEntries = entries.filter((e) =>
-    (e.capabilities ?? []).includes("vision"),
-  );
+  const chatEntries = entriesForCapability(entries, "chat");
+  const visionEntries = entriesForCapability(entries, "vision");
 
   // `redirect: "manual"` returns the 3xx to the SDK instead of following it;
   // the hop that would have carried the key never happens.
@@ -266,9 +266,9 @@ export function buildChainClient(
   }
 
   return {
-    tier: entries.map((e) => e.label).join("+") || "chain",
+    tier: chatEntries.map((e) => e.label).join("+") || "chain",
     complete: (prompt: string): Promise<string> =>
-      run(entries, async (provider, e) => {
+      run(chatEntries, async (provider, e) => {
         const { text } = await generateText({
           model: provider.chatModel(e.model),
           prompt,

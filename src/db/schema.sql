@@ -110,8 +110,6 @@ CREATE TABLE IF NOT EXISTS reports (
   config_json TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft',
   enabled INTEGER NOT NULL DEFAULT 1,
-  corroborations INTEGER NOT NULL DEFAULT 0,
-  pending_topics_json TEXT NOT NULL DEFAULT '[]',
   current_version INTEGER NOT NULL DEFAULT 0,
   sched_last_count INTEGER NOT NULL DEFAULT 0,
   sched_total INTEGER NOT NULL DEFAULT 0,

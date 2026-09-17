@@ -28,8 +28,6 @@ export interface ReportRow {
   config: GateConfig;
   status: string;
   enabled: boolean;
-  corroborations: number;
-  pending_topics: string[];
   current_version: number;
   sched_last_count: number;
   sched_total: number;
@@ -53,24 +51,14 @@ export class ReportDisabled extends Error {
 function toReportRow(row: Record<string, string | number | null>): ReportRow {
   // Stored config is operator input: parse, never cast.
   const config = GateConfigSchema.parse(JSON.parse(String(row.config_json)));
-  let pending: unknown = [];
-  try {
-    pending = JSON.parse(String(row.pending_topics_json ?? "[]"));
-  } catch {
-    pending = [];
-  }
   return {
     type: String(row.type),
     config,
     status: String(row.status),
     enabled: Number(row.enabled ?? 1) === 1,
-    corroborations: Number(row.corroborations ?? 0),
+    current_version: Number(row.current_version ?? 0),
     sched_last_count: Number(row.sched_last_count ?? 0),
     sched_total: Number(row.sched_total ?? 0),
-    pending_topics: Array.isArray(pending)
-      ? pending.filter((t): t is string => typeof t === "string")
-      : [],
-    current_version: Number(row.current_version ?? 0),
     approved_at: row.approved_at === null ? null : String(row.approved_at),
   };
 }
@@ -87,7 +75,7 @@ export async function reportRow(
   const now = new Date().toISOString();
   await db
     .prepare(
-      "INSERT INTO reports (type, config_json, status, enabled, corroborations, pending_topics_json, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES (?, ?, 'draft', 1, 0, '[]', 0, 0, 0, NULL, ?)",
+      "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES (?, ?, 'draft', 1, 0, 0, 0, NULL, ?)",
     )
     .bind(type, JSON.stringify({}), now)
     .run();
@@ -96,8 +84,6 @@ export async function reportRow(
     config_json: "{}",
     status: "draft",
     enabled: 1,
-    corroborations: 0,
-    pending_topics_json: "[]",
     current_version: 0,
     sched_last_count: 0,
     sched_total: 0,
@@ -114,7 +100,7 @@ export async function publishReportVersion(
 ): Promise<{ version: number }> {
   const row = await reportRow(db, type);
   if (!row.enabled) throw new ReportDisabled();
-  const evidence = await gatherEvidence(db, row.corroborations);
+  const evidence = await gatherEvidence(db);
   const verdict = evaluateGates(row.config, evidence);
   if (!verdict.ok) throw new GatesUnmet(verdict.unmet);
 
@@ -172,7 +158,7 @@ export async function publishReportVersion(
       .bind(crypto.randomUUID(), type, version, await sealText(kit, withBanner), now),
     db
       .prepare(
-        "UPDATE reports SET status = 'published', pending_topics_json = '[]', updated_at = ? WHERE type = ?",
+        "UPDATE reports SET status = 'published', updated_at = ? WHERE type = ?",
       )
       .bind(now, type),
   ]);
