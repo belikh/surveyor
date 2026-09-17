@@ -20,6 +20,7 @@ export type Lane =
   | "held-docx"
   | "held-xlsx"
   | "held-pptx"
+  | "held-email"
   | "held-ocr"
   | "rejected";
 
@@ -62,6 +63,18 @@ export function classifyLane(
   }
   if (extension === ".pptx") {
     return { lane: "held-pptx", reason: "slide walk needs the model pass" };
+  }
+  if (
+    extension === ".eml" ||
+    extension === ".mbox" ||
+    extension === ".mbx" ||
+    mime === "message/rfc822" ||
+    mime === "application/mbox"
+  ) {
+    return {
+      lane: "held-email",
+      reason: "email parses natively on drain; the model pass is the fallback",
+    };
   }
   if (
     extension === ".png" ||
