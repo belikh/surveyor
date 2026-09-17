@@ -49,6 +49,11 @@ import {
 } from "./lib/bootstrap";
 import { liveClient, hasSecretValue } from "./lib/providers";
 import { isAllowedProviderBaseUrl } from "./lib/net";
+import {
+  CIPHERTEXT_AUDIT_COLUMNS,
+  uncoveredSealedColumns,
+} from "./lib/ciphertext";
+import SCHEMA_SQL from "./db/schema.sql";
 import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
@@ -674,14 +679,21 @@ app.post("/api/audit/reseal", async (c) => {
   return c.json({ ok: failed === 0, resealed, skipped, failed });
 });
 
-// At-rest storage audit (operator-only): envelope shapes only, never
-// values. Lets the smoke script prove ciphertext-only storage on a live
-// installation without decrypting anything.
+// At-rest storage audit (operator-only): every sealed column by the schema
+// conventions, envelope shapes only, never values. Lets the smoke script
+// prove ciphertext-only storage on a live installation without decrypting
+// anything. `missing` names sealed columns this receipt does not cover: a
+// non-empty list fails the audit rather than quietly under-reporting.
 app.get("/api/audit/ciphertext", async (c) => {
   const denied = await requireOperator(c);
   if (denied) return c.json(deny(denied), denied);
-  const collect = async (sql: string): Promise<{ total: number; malformed: number }> => {
-    const rows = await c.env.DB.prepare(sql).all<{ v: string | null }>();
+  const collect = async (
+    table: string,
+    column: string,
+  ): Promise<{ total: number; malformed: number }> => {
+    const rows = await c.env.DB.prepare(
+      `SELECT ${column} AS v FROM ${table}`,
+    ).all<{ v: string | null }>();
     const list = Array.isArray(rows) ? rows : rows.results;
     const values = list.map((r) => String(r.v ?? ""));
     const blob = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -690,18 +702,26 @@ app.get("/api/audit/ciphertext", async (c) => {
       malformed: values.filter((v) => !blob.test(v)).length,
     };
   };
-  const messages = await collect("SELECT body_envelope AS v FROM messages");
-  const corpus = await collect("SELECT text_envelope AS v FROM corpus_docs");
-  const entities = await collect("SELECT name_envelope AS v FROM entities");
-  const versions = await collect("SELECT body_envelope AS v FROM report_versions");
-  const malformed =
-    messages.malformed + corpus.malformed + entities.malformed + versions.malformed;
+  const columns: Record<string, { total: number; malformed: number }> = {};
+  let total = 0;
+  let malformed = 0;
+  for (const { table, column } of CIPHERTEXT_AUDIT_COLUMNS) {
+    const counts = await collect(table, column);
+    columns[`${table}.${column}`] = counts;
+    total += counts.total;
+    malformed += counts.malformed;
+  }
+  const missing = uncoveredSealedColumns(
+    SCHEMA_SQL,
+    CIPHERTEXT_AUDIT_COLUMNS,
+  ).map((c) => `${c.table}.${c.column}`);
   return c.json({
-    ok: malformed === 0,
-    messages,
-    corpus,
-    entities,
-    report_versions: versions,
+    ok: malformed === 0 && missing.length === 0,
+    total,
+    malformed,
+    inspected: CIPHERTEXT_AUDIT_COLUMNS.map((c) => `${c.table}.${c.column}`),
+    missing,
+    columns,
   });
 });
 

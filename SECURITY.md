@@ -31,7 +31,7 @@ The platform ships as one installation per investigation. Security fixes land on
 | Untrusted content is data, never instructions | Delimited framing, read-only corpus tools, Zod at every boundary, output policing, `textContent`-only rendering |
 | Mirror purity | Mirror scan test proves zero entity names present |
 | Flags gate, and never act unattended | A flagged angle lists as `held` and approval is refused until a reviewer clears the flags; a flagged research line stores as `held` and is excluded from evidence; flagged model prose falls back to the deterministic body. Flags never publish, delete, or rewrite by themselves |
-| At-rest storage is ciphertext-only where audited | `/api/audit/ciphertext` reports envelope counts and malformed counts, without decrypting, for `messages.body_envelope`, `corpus_docs.text_envelope`, `entities.name_envelope` and `report_versions.body_envelope`. The remaining sealed columns (`attachments.filename`, `corpus_docs.filename`, `angles.rationale_envelope`, `research_lines.findings_envelope`, `report_entries.entry_envelope`) are not yet in the receipt — #14 extends the audit to every sealed column |
+| At-rest storage is ciphertext-only where audited | `/api/audit/ciphertext` inspects every sealed column by the schema conventions (`*_envelope` plus `filename`), reports envelope counts and malformed counts without decrypting, and fails with a `missing` list when a sealed column is outside its coverage: `messages.body_envelope`, `corpus_docs.text_envelope`, `corpus_docs.filename`, `entities.name_envelope`, `attachments.filename`, `angles.rationale_envelope`, `research_lines.findings_envelope`, `report_versions.body_envelope`, `report_entries.entry_envelope` |
 | Corpus custody | Constitution Principle XI ledger; raw held bytes in the operator's private R2 with a bounded retention window enforced by the scheduled sweep |
 
 ## OWASP LLM Top 10 mapping
@@ -128,8 +128,9 @@ each names the claim that changed.
   "submitter text is anonymised before any provider transit" omitted the
   ADR-0012 attachment exception. Both now name it.
 - **2026-09-17** — "At-rest storage is ciphertext-only" implied the audit
-  endpoint covered every sealed column; it covers four. The table now names the
-  covered columns and the gap (#14 extends the audit).
+  endpoint covered every sealed column; it covered four. A13 (#14) extended the
+  endpoint to every sealed column (filenames included) and made an incomplete
+  receipt fail with a `missing` list; the table now says so.
 - **2026-09-17** — "generated at provision" folded `OPERATOR_TOKEN` in with the
   key material. It is operator-chosen at boot and never returned; receipts carry
   slot names and booleans only. The secrets section now says so.
