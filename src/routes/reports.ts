@@ -21,6 +21,15 @@ import {
   GatesUnmet,
   ReportDisabled,
 } from "../lib/publish";
+import {
+  LegalGateUnmet,
+  LegalReviewBodySchema,
+  ReplyAttemptBodySchema,
+  listLegalSurface,
+  pendingVersion,
+  recordLegalReview,
+  recordReplyAttempt,
+} from "../lib/legal";
 
 export const reports = new Hono<{ Bindings: Bindings }>();
 
@@ -140,11 +149,66 @@ reports.post("/:type/publish", async (c) => {
     if (err instanceof GatesUnmet) {
       return c.json({ error: "gates_unmet", unmet: err.unmet }, 409);
     }
+    if (err instanceof LegalGateUnmet) {
+      return c.json({ error: "legal_gate_unmet", unmet: err.unmet }, 409);
+    }
     if (err instanceof ReportDisabled) {
       return c.json({ error: "disabled" }, 409);
     }
     throw err;
   }
+});
+
+// The legal gate's two recorded parts, each tied to the pending version:
+// the review itself, and the right-of-reply attempts (or the operator's
+// explicit decision that no reply is required).
+reports.post("/:type/legal", async (c) => {
+  const app = await getState(c.env);
+  const t = reportType(c);
+  if (!t) return notFound(c);
+  const parsed = LegalReviewBodySchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const row = await reportRow(c.env.DB, t);
+  const recorded = await recordLegalReview(
+    c.env.DB,
+    app.kit,
+    t,
+    pendingVersion(row.current_version),
+    parsed.data,
+  );
+  await app.audit("reports:legal-review-recorded");
+  return c.json(recorded, 201);
+});
+
+reports.get("/:type/legal", async (c) => {
+  const app = await getState(c.env);
+  const t = reportType(c);
+  if (!t) return notFound(c);
+  const row = await reportRow(c.env.DB, t);
+  const surface = await listLegalSurface(c.env.DB, app.kit, t);
+  return c.json({
+    type: t,
+    pending_version: pendingVersion(row.current_version),
+    ...surface,
+  });
+});
+
+reports.post("/:type/reply", async (c) => {
+  const app = await getState(c.env);
+  const t = reportType(c);
+  if (!t) return notFound(c);
+  const parsed = ReplyAttemptBodySchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const row = await reportRow(c.env.DB, t);
+  const recorded = await recordReplyAttempt(
+    c.env.DB,
+    app.kit,
+    t,
+    pendingVersion(row.current_version),
+    parsed.data,
+  );
+  await app.audit("reports:right-of-reply-logged");
+  return c.json(recorded, 201);
 });
 
 reports.post("/:type/tick", async (c) => {

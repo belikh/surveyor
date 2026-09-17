@@ -181,10 +181,16 @@ app.use("/api/engine/*", async (c, next) => {
 });
 app.route("/api/engine", engine);
 
-// Report mutation (approve/publish/tick/draft) is operator-only; published
-// reads stay public.
+// Report mutation (approve/publish/tick/draft) is operator-only, as are the
+// legal gate's audit views (they name reviewers and reply subjects);
+// published reads stay public.
 app.use("/api/reports/*", async (c, next) => {
-  if (c.req.method !== "GET" || c.req.path.endsWith("/draft")) {
+  if (
+    c.req.method !== "GET" ||
+    c.req.path.endsWith("/draft") ||
+    c.req.path.endsWith("/legal") ||
+    c.req.path.endsWith("/reply")
+  ) {
     const denied = await requireOperator(c);
     if (denied) return c.json(deny(denied), denied);
   }

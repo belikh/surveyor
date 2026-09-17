@@ -209,3 +209,28 @@ CREATE TABLE IF NOT EXISTS message_categories (
   category_hmac TEXT NOT NULL,
   PRIMARY KEY (submission_id, seq, category_hmac)
 );
+
+-- Publication legal gate: one legal review per report version, and the
+-- right-of-reply attempts logged against it. Reviewer, notes and reply
+-- detail are sealed; version, reply_required and outcome stay plaintext so
+-- the gate check and the audit list do not open records.
+CREATE TABLE IF NOT EXISTS report_legal_records (
+  id TEXT PRIMARY KEY,
+  report_type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  reply_required INTEGER NOT NULL DEFAULT 1,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (report_type, version)
+);
+
+CREATE TABLE IF NOT EXISTS right_of_reply_attempts (
+  id TEXT PRIMARY KEY,
+  report_type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  attempted_at TEXT NOT NULL,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_reply_attempts_report ON right_of_reply_attempts(report_type, version);

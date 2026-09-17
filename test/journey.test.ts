@@ -228,10 +228,27 @@ describe("full journey", () => {
     ).json()) as Record<string, string>;
     expect(done.status).toBe("complete");
 
-    // 6. Approve + publish a report; pack generates.
+    // 6. Approve, record the legal release, publish a report; pack generates.
     await callApp(env, "/api/reports/briefing/approve", {
       method: "POST",
       headers: auth,
+    });
+    await callApp(env, "/api/reports/briefing/legal", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        reviewer: "A. Lawyer",
+        notes: "Defamation and public-interest check complete",
+      }),
+    });
+    await callApp(env, "/api/reports/briefing/reply", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        subject: "Example Pty Ltd",
+        channel: "email",
+        outcome: "no_response",
+      }),
     });
     const pub = (await (
       await callApp(env, "/api/reports/briefing/publish", {
