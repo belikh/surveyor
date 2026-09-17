@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS entities (
   name_hmac TEXT NOT NULL
 );
 
+-- Entity index over gated text: person nodes are the quarantine pseudonyms
+-- (`[person A]`), joined to sealed entities by HMAC only. No real name ever
+-- lands here; reruns converge via the primary key.
+CREATE TABLE IF NOT EXISTS entity_index (
+  submission_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  name_hmac TEXT NOT NULL,
+  PRIMARY KEY (submission_id, label, name_hmac)
+);
+CREATE INDEX IF NOT EXISTS ix_entity_index_hmac ON entity_index(name_hmac);
+
 CREATE TABLE IF NOT EXISTS topics (
   submission_id TEXT NOT NULL,
   topic TEXT NOT NULL,

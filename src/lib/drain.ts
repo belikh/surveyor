@@ -5,6 +5,7 @@
 // and the safety rules.
 
 import { gateCorpusText } from "./ingest";
+import type { QuarantineHit } from "./intake";
 import { extractNativeText } from "./native";
 import type { ModelClient } from "./serve";
 
@@ -58,6 +59,8 @@ export interface DrainOutcome {
   text: string;
   /** Quarantined names discovered during the gate (sealed by the caller). */
   names: string[];
+  /** Pseudonym markers in the gated text, paired with their names. */
+  hits: QuarantineHit[];
 }
 
 /**
@@ -74,6 +77,7 @@ export function applyDrain(doc: HeldDoc, result: LaneResult): DrainOutcome {
       reason: result.reason,
       text: "",
       names: [],
+      hits: [],
     };
   }
   if (result.text.trim().length === 0) {
@@ -84,6 +88,7 @@ export function applyDrain(doc: HeldDoc, result: LaneResult): DrainOutcome {
       reason: "extraction produced no text",
       text: "",
       names: [],
+      hits: [],
     };
   }
   const gated = gateCorpusText(result.text);
@@ -94,6 +99,7 @@ export function applyDrain(doc: HeldDoc, result: LaneResult): DrainOutcome {
     reason: null,
     text: gated.text,
     names: gated.names,
+    hits: gated.hits,
   };
 }
 

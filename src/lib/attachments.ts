@@ -7,6 +7,11 @@
 import type { Bindings } from "../env";
 import { getState } from "../state";
 import { nameHmac, openText, sealText } from "./vault";
+import {
+  entityIndexRows,
+  entityIndexStatements,
+  type SealedEntityRef,
+} from "./entities";
 import { recordTurn } from "./telemetry";
 import { runDrain, type HeldDoc } from "./drain";
 import { buildLaneHandlers } from "./lanes";
@@ -154,19 +159,32 @@ export async function drainAttachmentById(
         await sealText(app.kit, r.outcome.text),
       ),
     ];
-    // Quarantine attachment names exactly as free-text names are sealed.
-    for (let i = 0; i < r.outcome.names.length; i++) {
+    // Quarantine attachment names exactly as free-text names are sealed,
+    // and index the gated testimony the gate produced (by HMAC, no names).
+    // The sealed row keeps the lane label; the index node is the pseudonym
+    // the gated text actually shows.
+    const sealed: SealedEntityRef[] = [];
+    for (let i = 0; i < r.outcome.hits.length; i++) {
+      const hit = r.outcome.hits[i];
+      const hmac = await nameHmac(app.kit, hit.name);
+      sealed.push({ label: hit.label, hmac });
       statements.push(
         env.DB.prepare(
           "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
         ).bind(
           row.submission_id,
           `[attachment-name ${i + 1}]`,
-          await sealText(app.kit, r.outcome.names[i]),
-          await nameHmac(app.kit, r.outcome.names[i]),
+          await sealText(app.kit, hit.name),
+          hmac,
         ),
       );
     }
+    statements.push(
+      ...entityIndexStatements(
+        env.DB,
+        entityIndexRows(row.submission_id, r.outcome.text, sealed),
+      ),
+    );
     statements.push(
       env.DB.prepare(
         "UPDATE attachments SET status = ?, reason = NULL, raw_key = NULL, retry_after = NULL WHERE id = ?",

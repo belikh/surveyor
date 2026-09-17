@@ -39,6 +39,7 @@ import {
 } from "./lib/provision";
 import { createCloudflareApi } from "./lib/cfapi";
 import { liveClient, hasSecretValue } from "./lib/providers";
+import { resolveEntityLinks } from "./lib/entities";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
 import { listTelemetry } from "./lib/telemetry";
@@ -519,6 +520,20 @@ app.get("/api/intake/entities/groups", async (c) => {
   // Unbound .all() returns rows directly on both D1 shims used here.
   const groups = Array.isArray(rows) ? rows : rows.results;
   return c.json({ groups });
+});
+
+// Entity index links: person nodes are quarantine pseudonyms joined to
+// sealed entities by HMAC. Operator-gated; labels and HMACs only — names
+// stay sealed (revealing one is a separately audited action). An HMAC
+// resolves the same person across every document that mentions them.
+app.get("/api/intake/entities/links", async (c) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  const hmac = c.req.query("hmac");
+  if (hmac !== undefined && !/^[0-9a-f]{64}$/.test(hmac)) {
+    return c.json({ error: "invalid_hmac" }, 422);
+  }
+  return c.json({ links: await resolveEntityLinks(c.env.DB, hmac) });
 });
 
 // One-shot re-seal after key rotation: rows sealed under an older key pair

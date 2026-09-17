@@ -26,6 +26,12 @@ import {
 } from "../lib/intake";
 import { groundedQuestions, ROUNDS_MAX } from "../lib/rounds";
 import { normaliseTopic } from "../lib/engine";
+import {
+  entityIndexRows,
+  entityIndexStatements,
+  type IndexedEntity,
+  type SealedEntityRef,
+} from "../lib/entities";
 import { completeAndRetrigger } from "../lib/retrigger";
 import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
@@ -220,32 +226,35 @@ intake.post("/:id/steps", async (c) => {
   ).bind(id).first<{ maxSeq: number | null }>();
   let seq = (existing?.maxSeq ?? -1) + 1;
   const batch: Array<{ sql: string; params?: unknown[] }> = [];
+  // Entity index rows: built from the gated (scrubbed) answer text the gate
+  // just produced, joined by HMAC — the raw name never enters the index.
+  const indexRows: IndexedEntity[] = [];
   for (const { topic, scrubbed, hits } of prepared) {
     const envelope = await sealText(app.kit, scrubbed);
     batch.push({
       sql: "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES (?, ?, 'submitter', 'structured', ?)",
       params: [id, seq++, envelope],
     });
+    const sealed: SealedEntityRef[] = [];
     for (const h of hits) {
+      const hmac = await nameHmac(app.kit, h.name);
       batch.push({
         sql: "INSERT INTO entities (submission_id, label, name_envelope, name_hmac) VALUES (?, ?, ?, ?)",
-        params: [
-          id,
-          h.label,
-          await sealText(app.kit, h.name),
-          await nameHmac(app.kit, h.name),
-        ],
+        params: [id, h.label, await sealText(app.kit, h.name), hmac],
       });
+      sealed.push({ label: h.label, hmac });
     }
+    indexRows.push(...entityIndexRows(id, scrubbed, sealed));
     batch.push({
       sql: "INSERT INTO topics (submission_id, topic, source) VALUES (?, ?, 'baseline') ON CONFLICT(submission_id, topic) DO NOTHING",
       params: [id, normaliseTopic(topic)],
     });
   }
   // FakeD1.batch takes prepared statements; real D1 too — build them here.
-  await c.env.DB.batch(
-    batch.map((b) => c.env.DB.prepare(b.sql).bind(...(b.params ?? []))),
-  );
+  await c.env.DB.batch([
+    ...batch.map((b) => c.env.DB.prepare(b.sql).bind(...(b.params ?? []))),
+    ...entityIndexStatements(c.env.DB, indexRows),
+  ]);
   return c.json({ saved: parsed.data.answers.length });
 });
 
