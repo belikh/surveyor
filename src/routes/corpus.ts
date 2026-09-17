@@ -19,6 +19,7 @@ import {
 } from "../lib/ingest";
 import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
 import type { QuarantineHit } from "../lib/intake";
+import { delimitedToText } from "../lib/tables";
 import { storeBody } from "../lib/upload";
 
 export const corpus = new Hono<{ Bindings: Bindings }>();
@@ -90,6 +91,10 @@ corpus.post("/", async (c) => {
       }).decode(forwarded.bytes);
     } catch {
       return c.json({ error: "rejected", detail: "not decodable text" }, 422);
+    }
+    // CSV/TSV are structured tables: keep column boundaries in the mirror.
+    if (decision.table) {
+      raw = delimitedToText(raw, decision.table === "tsv" ? "\t" : ",");
     }
   }
 

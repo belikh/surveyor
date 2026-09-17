@@ -28,6 +28,8 @@ export type Lane =
 export interface LaneDecision {
   lane: Lane;
   reason?: string;
+  /** Native delimited-table formatting for CSV/TSV text (C5). */
+  table?: "csv" | "tsv";
 }
 
 const ext = (filename: string): string => {
@@ -50,8 +52,14 @@ export function classifyLane(
   }
   const extension = ext(filename);
   const mime = contentType.toLowerCase();
-  if ([".txt", ".md", ".markdown", ".csv", ".tsv"].includes(extension)) {
+  if ([".txt", ".md", ".markdown"].includes(extension)) {
     return { lane: "native" };
+  }
+  if (extension === ".csv") {
+    return { lane: "native", table: "csv" };
+  }
+  if (extension === ".tsv") {
+    return { lane: "native", table: "tsv" };
   }
   if (extension === ".pdf" || mime === "application/pdf") {
     return { lane: "held-pdf", reason: "page render needs the model pass" };

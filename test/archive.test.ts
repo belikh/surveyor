@@ -38,6 +38,7 @@ function bundle(): Uint8Array {
   ]);
   return buildZip([
     { name: "notes.txt", data: "Rosters are late", deflate: true },
+    { name: "hours.csv", data: "Week,Hours\n1,38\n", deflate: true },
     {
       name: "report.docx",
       data: buildDocx(["Rosters signed by Zara Kline"]),
@@ -54,9 +55,13 @@ function bundle(): Uint8Array {
 describe("native archive extraction", () => {
   it("classifies members individually and reads the supported ones", async () => {
     const text = await extractArchiveText(bundle(), extractNativeText);
-    expect(text).toContain("# Archive: 7 members");
+    expect(text).toContain("# Archive: 8 members");
     expect(text).toContain("## Member: notes.txt (native)");
     expect(text).toContain("Rosters are late");
+    // A CSV member gets the same column-aware rows as the corpus route.
+    expect(text).toContain("## Member: hours.csv (native)");
+    expect(text).toContain("Week | Hours");
+    expect(text).toContain("1 | 38");
     // A DOCX member parses through its own lane.
     expect(text).toContain("## Member: report.docx (held-docx, parsed)");
     expect(text).toContain("Rosters signed by Zara Kline");

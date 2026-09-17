@@ -8,6 +8,7 @@
 // yields nothing, which the lane reads as "use the model pass".
 
 import { classifyLane, MAX_DOC_BYTES } from "./ingest";
+import { delimitedToText } from "./tables";
 import { openZip } from "./zip";
 
 /** Members processed from one archive before the truncation marker. */
@@ -149,7 +150,10 @@ async function readArchive(
       continue;
     }
     if (decision.lane === "native") {
-      const text = decodeText(member);
+      // CSV/TSV members get the same column-aware rows as the corpus route.
+      const text = decision.table
+        ? delimitedToText(decodeText(member), decision.table === "tsv" ? "\t" : ",")
+        : decodeText(member);
       if (!text.trim()) {
         push(sink, `## Member: ${name} (native, skipped: extracted no text)`);
         continue;
