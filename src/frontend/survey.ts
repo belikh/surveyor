@@ -305,7 +305,39 @@ async function attachFile(f, note) {
   if (isPdf) {
     note.textContent = "Reading the PDF in your browser…";
     await loadPdfTools();
-    const text = await window.SurveyorPdf.extractText(f);
+    const tools = window.SurveyorPdf;
+    // F2: per-page hybrid routing, mirroring the operator uploader — text
+    // pages go as text, image-bearing pages as PNGs, so mixed PDFs lose
+    // nothing. Digital-only PDFs keep the single-text behaviour.
+    if (tools.analysePages && tools.rasterisePages) {
+      const analysis = await tools.analysePages(f);
+      const base = f.name.replace(/\.pdf$/i, "");
+      const textPages = analysis.filter((p) => p.hasText);
+      const imagePages = analysis.filter((p) => p.hasImage);
+      if (imagePages.length === 0 && textPages.length > 0) {
+        const text = textPages.map((p) => p.text).join("\\n\\n").trim();
+        await sendAttachment(S.id, base + ".txt", "text/plain", new Blob([text], { type: "text/plain" }));
+        return;
+      }
+      if (textPages.length === 0) {
+        const targets = (imagePages.length > 0 ? imagePages : analysis).map((p) => p.page);
+        note.textContent = "Scanned PDF: preparing " + targets.length + " pages in your browser…";
+        const rendered = await tools.rasterisePages(f, targets);
+        for (const item of rendered) {
+          await sendAttachment(S.id, base + "-page-" + item.page + ".png", "image/png", item.blob);
+        }
+        return;
+      }
+      const text = textPages.map((p) => p.text).join("\\n\\n").trim();
+      note.textContent = "Mixed PDF: sending text plus " + imagePages.length + " scanned pages…";
+      await sendAttachment(S.id, base + ".txt", "text/plain", new Blob([text], { type: "text/plain" }));
+      const rendered = await tools.rasterisePages(f, imagePages.map((p) => p.page));
+      for (const item of rendered) {
+        await sendAttachment(S.id, base + "-page-" + item.page + ".png", "image/png", item.blob);
+      }
+      return;
+    }
+    const text = await tools.extractText(f);
     if (text && text.length > 40) {
       await sendAttachment(
         S.id,
@@ -316,7 +348,7 @@ async function attachFile(f, note) {
       return;
     }
     note.textContent = "Scanned PDF: preparing pages in your browser…";
-    const pages = await window.SurveyorPdf.rasterise(f);
+    const pages = await tools.rasterise(f);
     for (let i = 0; i < pages.length; i++) {
       await sendAttachment(
         S.id,

@@ -38,7 +38,11 @@ npm run smoke:runtime
 ```
 
 To install for real, see [RUNBOOK.md](RUNBOOK.md) and
-[deploy-button.md](deploy-button.md).
+[deploy-button.md](deploy-button.md). To exercise the live provisioner and
+consent flow against a real account, run the repeatable live-trial wizard
+(`scripts/live-trial-wizard.sh`): it is syntax-checked, holds no
+trial-specific values, and walks deploy → boot → consent → provision →
+smoke → teardown end to end.
 
 ## Commands
 

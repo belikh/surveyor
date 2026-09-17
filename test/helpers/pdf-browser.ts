@@ -18,7 +18,16 @@ export interface BrowserSeamCalls {
 
 export interface PdfBrowserTools {
   extractText: (file: Blob) => Promise<string>;
+  extractPageTexts: (file: Blob) => Promise<string[]>;
+  analysePages: (
+    file: Blob,
+  ) => Promise<Array<{ page: number; text: string; hasText: boolean; hasImage: boolean }>>;
   rasterise: (file: Blob, maxPages?: number) => Promise<Blob[]>;
+  rasterisePages: (
+    file: Blob,
+    pages: number[],
+    maxPages?: number,
+  ) => Promise<Array<{ page: number; blob: Blob }>>;
   pageCount: (file: Blob) => Promise<number>;
 }
 

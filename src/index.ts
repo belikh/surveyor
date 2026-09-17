@@ -37,6 +37,7 @@ import {
   type OAuthConfig,
 } from "./lib/oauth";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { buildInfo } from "./lib/build";
 import { WorkflowEntrypoint } from "cloudflare:workers";
 import {
   provisionStack,
@@ -448,6 +449,9 @@ app.post("/api/providers/reorder", async (c) => {
 // enabled the public sitekey rides along so the survey shell can render
 // the widget (a sitekey is public; its secret never leaves the store).
 app.get("/api/status", async (c) => {
+  // Deployed build identity (F4): which commit is live, so "is the fix
+  // deployed?" is a one-line check. Local/dev builds say so honestly.
+  const build = buildInfo();
   let s;
   try {
     s = await (await getState(c.env)).loadSetup();
@@ -460,6 +464,7 @@ app.get("/api/status", async (c) => {
           "Open the wizard to boot the installation.",
         provisioned: false,
         operator_token_set: Boolean(c.env.OPERATOR_TOKEN),
+        build,
       });
     }
     throw err;
@@ -472,6 +477,7 @@ app.get("/api/status", async (c) => {
     warning: string | null;
     provisioned: boolean;
     operator_token_set: boolean;
+    build: { commit: string; local: boolean };
     turnstile_sitekey?: string;
   } = {
     degraded,
@@ -480,6 +486,7 @@ app.get("/api/status", async (c) => {
     // The write surfaces answer 404 while this is unset; the wizard must be
     // able to see that honestly rather than discover it on first write.
     operator_token_set: Boolean(c.env.OPERATOR_TOKEN),
+    build,
   };
   if (c.env.TURNSTILE_SECRET && c.env.TURNSTILE_SITEKEY) {
     body.turnstile_sitekey = c.env.TURNSTILE_SITEKEY;

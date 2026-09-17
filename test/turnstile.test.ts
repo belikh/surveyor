@@ -128,6 +128,7 @@ describe("Turnstile configuration surface", () => {
     ).json()) as Record<string, unknown>;
     expect(off.turnstile_sitekey).toBeUndefined();
     expect(Object.keys(off).sort()).toEqual([
+      "build",
       "degraded",
       "operator_token_set",
       "provisioned",

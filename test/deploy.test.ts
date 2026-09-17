@@ -101,6 +101,21 @@ describe("deploy surface docs", () => {
     }
   });
 
+  // F1 (#64): a fresh account following only the docs reaches a deployed
+  // worker — the D1 create-plus-id step and the R2 enablement prerequisite
+  // (including the billing possibility) must be named.
+  it("runbook names the fresh-install D1 and R2 prerequisites", () => {
+    const runbook = readFileSync(join(__dirname, "..", "RUNBOOK.md"), "utf8");
+    for (const needle of [
+      "wrangler d1 create surveyor-db",
+      'database_id = "REPLACE_VIA_PROVISIONING"',
+      "wrangler r2 bucket create surveyor-corpus",
+      "billing",
+    ]) {
+      expect(runbook, needle).toContain(needle);
+    }
+  });
+
   it("deploy button names every provisioned resource", () => {
     const button = readFileSync(join(__dirname, "..", "deploy-button.md"), "utf8");
     for (const needle of ["D1 database", "R2 bucket", "Queue", "Workflow", "Workers AI", "Cron trigger"]) {

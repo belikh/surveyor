@@ -67,7 +67,45 @@ async function handleFile(file, note) {
   const isPdf = file.type === "application/pdf" || /\\.pdf$/i.test(file.name);
   if (isPdf) {
     note.textContent = "Reading PDF\\u2026";
-    const text = await window.SurveyorPdf.extractText(file);
+    const tools = window.SurveyorPdf;
+    // F2: per-page hybrid routing — text pages upload as text,
+    // image-bearing pages rasterise to PNGs, so a mixed PDF never silently
+    // drops its raster portions. Digital-only PDFs keep the single-text
+    // behaviour below.
+    if (tools.analysePages && tools.rasterisePages) {
+      const analysis = await tools.analysePages(file);
+      const base = file.name.replace(/\\.pdf$/i, "");
+      const textPages = analysis.filter((p) => p.hasText);
+      const imagePages = analysis.filter((p) => p.hasImage);
+      if (imagePages.length === 0 && textPages.length > 0) {
+        const text = textPages.map((p) => p.text).join("\\n\\n").trim();
+        note.textContent = "Digital PDF: uploading extracted text\\u2026";
+        await uploadOne(base + ".txt", "text/plain", new Blob([text], { type: "text/plain" }));
+        return;
+      }
+      if (textPages.length === 0) {
+        const targets = (imagePages.length > 0 ? imagePages : analysis).map((p) => p.page);
+        note.textContent = "Scanned PDF: rasterising " + targets.length + " pages in your browser\\u2026";
+        const rendered = await tools.rasterisePages(file, targets);
+        for (const item of rendered) {
+          note.textContent = "Uploading scanned page " + item.page + " of " + targets.length + "\\u2026";
+          await uploadOne(base + "-page-" + item.page + ".png", "image/png", item.blob);
+        }
+        note.textContent = "Sent " + rendered.length + " scanned pages (no text layer found).";
+        return;
+      }
+      const text = textPages.map((p) => p.text).join("\\n\\n").trim();
+      note.textContent = "Mixed PDF: uploading extracted text plus " + imagePages.length + " scanned pages\\u2026";
+      await uploadOne(base + ".txt", "text/plain", new Blob([text], { type: "text/plain" }));
+      const rendered = await tools.rasterisePages(file, imagePages.map((p) => p.page));
+      for (const item of rendered) {
+        note.textContent = "Uploading scanned page " + item.page + " of " + imagePages.length + "\\u2026";
+        await uploadOne(base + "-page-" + item.page + ".png", "image/png", item.blob);
+      }
+      note.textContent = "Sent text (" + textPages.length + " pages) plus " + rendered.length + " scanned pages.";
+      return;
+    }
+    const text = await tools.extractText(file);
     if (text && text.length > 40) {
       note.textContent = "Digital PDF: uploading extracted text\\u2026";
       await uploadOne(
@@ -78,7 +116,7 @@ async function handleFile(file, note) {
       return;
     }
     note.textContent = "Scanned PDF: rasterising pages in your browser\\u2026";
-    const pages = await window.SurveyorPdf.rasterise(file);
+    const pages = await tools.rasterise(file);
     for (let i = 0; i < pages.length; i++) {
       note.textContent = "Uploading page " + (i + 1) + " of " + pages.length + "\\u2026";
       await uploadOne(file.name.replace(/\\.pdf$/i, "") + "-page-" + (i + 1) + ".png", "image/png", pages[i]);
@@ -92,12 +130,21 @@ async function render() {
   const tokenInput = el("input", { type: "password", placeholder: "Operator token" });
   const setToken = el("button", {}, "Set token");
   setToken.onclick = () => { TOKEN = tokenInput.value.trim(); render(); };
-  const tokenNote = el("p", { class: "warn" }, TOKEN ? "Token set (memory only)." : "Token not set.");
+  const tokenNote = el("p", { class: "warn" }, TOKEN ? "Token set (memory only)." : "Set the operator token to enable uploads — no request leaves this page until then.");
   const picker = el("input", { type: "file", multiple: "true" });
   const go = el("button", {}, "Upload files");
   const note = el("p", { class: "warn" }, "");
   const docs = el("ul", {});
+  // F3: the controls are inert until the operator token is set, instead of
+  // firing unauthenticated writes that answer a bare 401. A16 live trial: a
+  // real operator hit Upload without pressing Set token and read it as a
+  // system failure.
+  const gated = !TOKEN;
+  picker.disabled = gated;
+  go.disabled = gated;
+  const gateHint = TOKEN ? "" : "Set the operator token above to enable uploads.";
   go.onclick = async () => {
+    if (!TOKEN) { note.textContent = gateHint; return; }
     go.disabled = true;
     try {
       for (const file of picker.files || []) {
@@ -111,7 +158,7 @@ async function render() {
     } catch (e) {
       note.textContent = "Error: " + e.message;
     }
-    go.disabled = false;
+    go.disabled = !TOKEN;
   };
   async function list() {
     try {

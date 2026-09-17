@@ -10,15 +10,49 @@ account; this repository is the installer.
 Workflow, Workers AI binding, and the cron trigger in your account.
 
 **Fallback — scoped token.** Create an API token with the scopes listed in
-`deploy-button.md`, then:
+`deploy-button.md`, then follow the trial-verified sequence (the same order
+`scripts/live-trial-wizard.sh` runs; a fresh account following only these
+docs reaches a deployed worker):
 
 ```sh
 npm ci && npm run build
-# First: replace `database_id = "REPLACE_VIA_PROVISIONING"` in wrangler.toml
-# with the D1 id your provisioning step created (the wizard's receipt has
-# it). Resource names in wrangler.toml must match the provisioned ones.
-npx wrangler deploy
 ```
+
+1. **Create the D1 database and put its id in place of the placeholder,
+   before deploy.** Wrangler refuses the placeholder id, so this step comes
+   first — deploy cannot succeed without it:
+
+   ```sh
+   npx wrangler d1 create surveyor-db
+   # Copy the id it prints, then replace
+   # `database_id = "REPLACE_VIA_PROVISIONING"` in wrangler.toml with it.
+   # If the name already exists, resolve the id instead:
+   #   npx wrangler d1 info surveyor-db --json
+   #   npx wrangler d1 list --json
+   ```
+
+   Resource names in wrangler.toml must match the provisioned ones. Keep the
+   real id out of upstream commits (the trial backs up wrangler.toml and
+   restores the placeholder when done).
+
+2. **Enable R2 on the account, then ensure the corpus bucket exists.**
+   Enabling R2 is a dashboard step this runbook cannot take for you: open
+   the dashboard, pick R2 in the sidebar and follow the enable flow (it may
+   ask for billing details). Then:
+
+   ```sh
+   npx wrangler r2 bucket create surveyor-corpus
+   npx wrangler r2 bucket list | grep surveyor-corpus
+   ```
+
+   Deploying without this step leaves the held-doc store missing; without
+   R2 enabled the create fails with an enable-R2 error, not a bucket error.
+
+3. Deploy:
+
+   ```sh
+   npx wrangler deploy
+   ```
 
 Revoke the token straight after. Re-running provisioning (the wizard's boot
 panel or `POST /api/provision`) is non-destructive: it ensures missing
@@ -113,6 +147,10 @@ node scripts/smoke.mjs https://your-install.workers.dev --token <operator-token>
 Checks security headers, public status, the survey shell, a proof-of-work
 submission round trip, and (with the token) the at-rest ciphertext audit.
 Per-check receipts; exits non-zero on any failure.
+
+`GET /api/status` names the deployed build (`build.commit`; `build.local`
+is true for local/dev builds). After deploying a fix, that one-line check
+— not asset archaeology — answers "is the fix deployed?".
 
 The browser PDF path is checked by `test/browser-check.test.ts`, part of
 `npm test`: it loads the served survey shell and drives the served PDF.js

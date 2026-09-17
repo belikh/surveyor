@@ -196,6 +196,18 @@ EVIDENCE_DIR="evidence/live-trial"
 EVIDENCE_FILE="$EVIDENCE_DIR/$TRIAL_DATE-provisioning-trial.md"
 mkdir -p "$EVIDENCE_DIR"
 
+# Wrangler helper, defined once so every stage (deploy, OAuth re-deploy)
+# uses it — including when the deploy-button path skipped the build stage.
+# Wrangler 4 prefers CLOUDFLARE_ACCOUNT_ID and prints a deprecation notice
+# for CF_ACCOUNT_ID that would poison JSON parsing: every wrangler call
+# runs with the old name hidden.
+wr() { env -u CF_ACCOUNT_ID CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID" npx wrangler "$@"; }
+# Parse wrangler JSON from the first [ or { — notices and banners on
+# stdout must never break id extraction.
+parse_uuid() {
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s.slice(s.search(/[[{]/)));if(j&&typeof j==="object"&&!Array.isArray(j)&&(j.uuid||j.database_id)){console.log(j.uuid||j.database_id);return}const a=Array.isArray(j)?j:(j.d1_databases||j.databases||[]);const h=a.find(d=>d.name==="surveyor-db");console.log(h?(h.uuid||h.database_id):"")}catch(e){}})'
+}
+
 banner "Surveyor live trial (A16 #17 · A17 #18)"
 
 # ── Stage 1: prerequisites ───────────────────────────────────────────────
@@ -246,15 +258,6 @@ if confirm "Run npm ci, build, and wrangler deploy now"; then
   npm ci
   npm run build
   export CLOUDFLARE_API_TOKEN="$CF_API_TOKEN"
-  # Wrangler 4 prefers CLOUDFLARE_ACCOUNT_ID and prints a deprecation
-  # notice for CF_ACCOUNT_ID that would poison JSON parsing below: every
-  # wrangler call runs with the old name hidden.
-  wr() { env -u CF_ACCOUNT_ID CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID" npx wrangler "$@"; }
-  # Parse wrangler JSON from the first [ or { — notices and banners on
-  # stdout must never break id extraction.
-  parse_uuid() {
-    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s.slice(s.search(/[[{]/)));if(j&&typeof j==="object"&&!Array.isArray(j)&&(j.uuid||j.database_id)){console.log(j.uuid||j.database_id);return}const a=Array.isArray(j)?j:(j.d1_databases||j.databases||[]);const h=a.find(d=>d.name==="surveyor-db");console.log(h?(h.uuid||h.database_id):"")}catch(e){}})'
-  }
   say "wrangler refuses the placeholder D1 id, so the database is created"
   say "(or found by name) and its real id is written into wrangler.toml."
   say "A backup is taken first and restored at stage 10: the real id must"
@@ -326,15 +329,31 @@ pause "Booted (the wizard moved past the boot panel)?"
 
 # ── Stage 5: OAuth consent round trip ────────────────────────────────────
 stage "OAuth consent round trip (PKCE, live)"
-say "Consent needs a registered Cloudflare OAuth client (PKCE public"
-say "client, auth method none). How that client gets registered is itself"
-say "unverified: ADR-0008 records registration as a human step."
-ask CF_OAUTH_CLIENT_ID "Paste your OAuth client id, or leave empty if you have none:"
+say "This is the one-click path the product is designed around (ADR-0008,"
+say "ADR-0013): consent replaces the pasted token entirely. It needs one"
+say "registered OAuth client first — a two-minute dashboard step, verified"
+say "against the Cloudflare docs:"
+open_url "https://dash.cloudflare.com"
+step "Select your account → Manage Account → OAuth clients → Create client."
+step "Client name anything (e.g. surveyor-wizard); response type 'code';"
+step "grant type 'authorization_code'; token endpoint auth method 'none'"
+step "(PKCE public client — no secret is created or sent, per ADR-0013)."
+step "Redirect URI, exactly:"
+step "  $WORKER_URL/api/oauth/callback"
+step "Choose scopes covering Workers Scripts write and account read, create,"
+step "and copy the client id. Private visibility is fine (your members only;"
+step "no domain verification needed for this trial)."
+ask CF_OAUTH_CLIENT_ID "Paste the OAuth client id (or empty to skip the consent leg):"
 if [[ -z "$CF_OAUTH_CLIENT_ID" ]]; then
   warn "no client id: the consent leg cannot be exercised this run."
-  say "Record this in the findings file at stage 8 instead of inventing a registration."
+  say "Record this in the findings file at stage 8."
 else
-  say "Add CF_OAUTH_CLIENT_ID to wrangler.toml [vars] and redeploy, then:"
+  say "Setting CF_OAUTH_CLIENT_ID as a public var and redeploying:"
+  # Idempotent across re-runs: replaces the empty default or a previous id.
+  sed -i "s/^CF_OAUTH_CLIENT_ID = \".*\"$/CF_OAUTH_CLIENT_ID = \"$CF_OAUTH_CLIENT_ID\"/" wrangler.toml
+  export CLOUDFLARE_API_TOKEN="$CF_API_TOKEN"
+  wr deploy
+  unset CLOUDFLARE_API_TOKEN
   open_url "$WORKER_URL"
   step "Providers panel → 'Connect Cloudflare' → consent at Cloudflare."
   step "Confirm the panel reads 'Cloudflare connected. The token is held in"

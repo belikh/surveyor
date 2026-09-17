@@ -210,6 +210,7 @@ describe("GET /api/status", () => {
     expect(body.provisioned).toBe(true);
     expect(body.operator_token_set).toBe(true);
     expect(Object.keys(body).sort()).toEqual([
+      "build",
       "degraded",
       "operator_token_set",
       "provisioned",
