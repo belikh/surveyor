@@ -2,7 +2,11 @@
 // the gate writes into gated text (`[person A]`), joined to sealed entities
 // by HMAC only. Extraction reads gated text and the HMACs the gate already
 // computed — it never sees or stores a raw name, and a rerun writes no new
-// rows.
+// rows. Revealing one is a break-glass operator action that writes an audit
+// record and returns the name to that caller only.
+
+import { z } from "zod";
+import { openText, sealText, type VaultKit } from "./vault";
 
 export interface IndexedEntity {
   submission_id: string;
@@ -74,6 +78,144 @@ export async function writeEntityIndex(
 ): Promise<void> {
   if (rows.length === 0) return;
   await db.batch(entityIndexStatements(db, rows));
+}
+
+/** Where a revealed person appears: one link per pseudonym occurrence. */
+export interface EntityRevealLink {
+  submission_id: string;
+  label: string;
+}
+
+/** The sealed part of a reveal record: the operator states who and why. */
+export const RevealRecordSchema = z.object({
+  revealed_by: z.string().min(1).max(200),
+  reason: z.string().min(1).max(2000),
+});
+export type RevealRecord = z.infer<typeof RevealRecordSchema>;
+
+export interface EntityRevealView {
+  id: string;
+  name_hmac: string;
+  /** Where the revealed person appears: submission + pseudonym label. */
+  links: EntityRevealLink[];
+  revealed_by: string;
+  reason: string;
+  revealed_at: string;
+}
+
+export interface RevealedEntity {
+  /** The break-glass output: the one place a name is returned. */
+  name: string;
+  reveal: EntityRevealView;
+}
+
+/**
+ * Break-glass: open the sealed name behind an HMAC, return it to the
+ * caller, and write one audit record with who/when/why. An HMAC with no
+ * sealed entity is a refusal — nothing is returned and nothing is written.
+ * The name is not stored in the audit; another read needs another reveal.
+ */
+export async function revealEntity(
+  db: D1Database,
+  kit: VaultKit,
+  nameHmac: string,
+  input: RevealRecord,
+  now = new Date().toISOString(),
+): Promise<RevealedEntity | null> {
+  const rows = await db
+    .prepare(
+      "SELECT submission_id, label, name_envelope FROM entities " +
+        "WHERE name_hmac = ? ORDER BY submission_id, label",
+    )
+    .bind(nameHmac)
+    .all<{ submission_id: string; label: string; name_envelope: string }>();
+  const list = Array.isArray(rows) ? rows : rows.results;
+  if (list.length === 0) return null;
+  // Every row under one HMAC is the same name (the HMAC is the join key).
+  const name = await openText(kit, list[0].name_envelope);
+  const record = RevealRecordSchema.parse(input);
+  const seen = new Set<string>();
+  const links: EntityRevealLink[] = [];
+  for (const row of list) {
+    const key = `${row.submission_id}\u0000${row.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    links.push({ submission_id: row.submission_id, label: row.label });
+  }
+  const id = crypto.randomUUID();
+  await db.batch([
+    db
+      .prepare(
+        "INSERT INTO entity_reveals (id, name_hmac, links_json, record_envelope, revealed_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .bind(
+        id,
+        nameHmac,
+        JSON.stringify(links),
+        await sealText(kit, JSON.stringify(record)),
+        now,
+      ),
+    db
+      .prepare("INSERT INTO audit (ts, action) VALUES (?, ?)")
+      .bind(now, "entities:revealed"),
+  ]);
+  return {
+    name,
+    reveal: {
+      id,
+      name_hmac: nameHmac,
+      links,
+      revealed_by: record.revealed_by,
+      reason: record.reason,
+      revealed_at: now,
+    },
+  };
+}
+
+/**
+ * The operator-facing reveal audit: every record, newest first, opened for
+ * the operator. Names are not part of the record and never appear here —
+ * the audit proves the action, the reveal hands over the name.
+ */
+export async function listEntityReveals(
+  db: D1Database,
+  kit: VaultKit,
+): Promise<EntityRevealView[]> {
+  const rows = await db
+    .prepare(
+      "SELECT id, name_hmac, links_json, record_envelope, revealed_at " +
+        "FROM entity_reveals ORDER BY revealed_at DESC, id",
+    )
+    .all<{
+      id: string;
+      name_hmac: string;
+      links_json: string;
+      record_envelope: string;
+      revealed_at: string;
+    }>();
+  const list = Array.isArray(rows) ? rows : rows.results;
+  const out: EntityRevealView[] = [];
+  for (const row of list) {
+    const record = RevealRecordSchema.parse(
+      JSON.parse(await openText(kit, row.record_envelope)),
+    );
+    out.push({
+      id: row.id,
+      name_hmac: row.name_hmac,
+      links: z
+        .array(
+          z.object({
+            submission_id: z.string(),
+            label: z.string(),
+          }),
+        )
+        .parse(JSON.parse(row.links_json)),
+      revealed_by: record.revealed_by,
+      reason: record.reason,
+      revealed_at: row.revealed_at,
+    });
+  }
+  return out;
 }
 
 export interface EntityLink {

@@ -49,7 +49,7 @@ import {
   BootstrapError,
 } from "./lib/bootstrap";
 import { liveClient, hasSecretValue } from "./lib/providers";
-import { resolveEntityLinks } from "./lib/entities";
+import { resolveEntityLinks, listEntityReveals, revealEntity } from "./lib/entities";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import {
   CIPHERTEXT_AUDIT_COLUMNS,
@@ -688,6 +688,42 @@ app.get("/api/intake/entities/links", async (c) => {
     return c.json({ error: "invalid_hmac" }, 422);
   }
   return c.json({ links: await resolveEntityLinks(c.env.DB, hmac) });
+});
+
+// Break-glass reveal: opening a quarantined name is a deliberate operator
+// action that names who asked, when, and why, and writes an audit record
+// before returning the name. Refusals (bad token, malformed or unknown
+// HMAC, no stated reason) write nothing. Source-facing text never gains a
+// name from this: the reveal output goes to the operator request only.
+const RevealBodySchema = z.object({
+  hmac: z.string().regex(/^[0-9a-f]{64}$/),
+  revealed_by: z.string().min(1).max(200),
+  reason: z.string().min(1).max(2000),
+});
+
+app.post("/api/intake/entities/reveal", async (c) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  const parsed = RevealBodySchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const st = await getState(c.env);
+  const revealed = await revealEntity(c.env.DB, st.kit, parsed.data.hmac, {
+    revealed_by: parsed.data.revealed_by,
+    reason: parsed.data.reason,
+  });
+  if (!revealed) return c.json({ error: "not_found" }, 404);
+  return c.json(revealed, 201);
+});
+
+// The readable audit of those reveals: who/when/why and the pseudonyms
+// touched. The name itself is not in the record.
+app.get("/api/intake/entities/reveals", async (c) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  const st = await getState(c.env);
+  return c.json({ reveals: await listEntityReveals(c.env.DB, st.kit) });
 });
 
 // One-shot re-seal after key rotation: rows sealed under an older key pair

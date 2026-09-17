@@ -62,6 +62,20 @@ CREATE TABLE IF NOT EXISTS entity_index (
 );
 CREATE INDEX IF NOT EXISTS ix_entity_index_hmac ON entity_index(name_hmac);
 
+-- Break-glass entity reveals: opening a sealed name is an operator action
+-- that writes one audited record. Who/why are sealed (free text can carry
+-- a name); the HMAC and pseudonym links stay plaintext so the audit list
+-- is readable without opening records. The name itself is never stored
+-- here: re-reading it requires another audited reveal.
+CREATE TABLE IF NOT EXISTS entity_reveals (
+  id TEXT PRIMARY KEY,
+  name_hmac TEXT NOT NULL,
+  links_json TEXT NOT NULL,
+  record_envelope TEXT NOT NULL,
+  revealed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_entity_reveals_hmac ON entity_reveals(name_hmac);
+
 CREATE TABLE IF NOT EXISTS topics (
   submission_id TEXT NOT NULL,
   topic TEXT NOT NULL,

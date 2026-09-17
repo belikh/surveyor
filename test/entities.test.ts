@@ -269,3 +269,197 @@ describe("entity index over gated text (C9)", () => {
     expect(dump).not.toContain("Sandra");
   });
 });
+
+describe("audited entity reveal (C10)", () => {
+  function reveal(
+    env: Record<string, unknown>,
+    body: Record<string, unknown>,
+    token = TOKEN,
+  ) {
+    return callApp(env, "/api/intake/entities/reveal", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function sealedHmac(
+    env: Record<string, unknown>,
+  ): Promise<string> {
+    const rows = await rowsOf<{ name_hmac: string }>(
+      env.DB as FakeD1,
+      "SELECT name_hmac FROM entities",
+    );
+    expect(rows.length).toBe(1);
+    return rows[0].name_hmac;
+  }
+
+  it("reveals the sealed name and writes who, when and why to the audit", async () => {
+    const env = makeEnv();
+    await uploadText(env, "Sandra Bell approved the roster");
+    const hmac = await sealedHmac(env);
+
+    const res = await reveal(env, {
+      hmac,
+      revealed_by: "operator",
+      reason: "verifying before publication",
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      name: string;
+      reveal: {
+        id: string;
+        name_hmac: string;
+        links: Array<{ submission_id: string; label: string }>;
+        revealed_by: string;
+        reason: string;
+        revealed_at: string;
+      };
+    };
+    expect(body.name).toBe("Sandra Bell");
+    expect(body.reveal.name_hmac).toBe(hmac);
+    // Corpus rows keep the sealed lane label; the index holds the marker.
+    expect(body.reveal.links[0].label).toBe("[corpus-name 1]");
+    expect(body.reveal.links[0].submission_id).toMatch(/^corpus:/);
+    expect(body.reveal.revealed_by).toBe("operator");
+    expect(body.reveal.reason).toBe("verifying before publication");
+    expect(Number.isNaN(Date.parse(body.reveal.revealed_at))).toBe(false);
+
+    // The audit row is sealed at rest and readable through the audit route.
+    const stored = JSON.stringify(
+      await (env.DB as FakeD1).prepare("SELECT * FROM entity_reveals").all(),
+    );
+    expect(stored).not.toContain("Sandra Bell");
+    const listed = (await (
+      await callApp(env, "/api/intake/entities/reveals", { headers: auth })
+    ).json()) as { reveals: Array<Record<string, unknown>> };
+    expect(listed.reveals.length).toBe(1);
+    expect(listed.reveals[0].revealed_by).toBe("operator");
+    expect(listed.reveals[0].reason).toBe("verifying before publication");
+    expect(listed.reveals[0].name_hmac).toBe(hmac);
+  });
+
+  it("records every reveal, including a repeated one", async () => {
+    const env = makeEnv();
+    await uploadText(env, "Sandra Bell approved the roster");
+    const hmac = await sealedHmac(env);
+    const first = await reveal(env, {
+      hmac,
+      revealed_by: "operator",
+      reason: "first look",
+    });
+    const second = await reveal(env, {
+      hmac,
+      revealed_by: "operator",
+      reason: "second look",
+    });
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    const count = await (env.DB as FakeD1)
+      .prepare("SELECT COUNT(*) AS n FROM entity_reveals")
+      .first<{ n: number }>();
+    expect(count?.n).toBe(2);
+    const audit = await (env.DB as FakeD1)
+      .prepare("SELECT COUNT(*) AS n FROM audit WHERE action = 'entities:revealed'")
+      .first<{ n: number }>();
+    expect(audit?.n).toBe(2);
+  });
+
+  it("refuses a reveal with no operator token and writes no audit", async () => {
+    const env = makeEnv();
+    await uploadText(env, "Sandra Bell approved the roster");
+    const hmac = await sealedHmac(env);
+    const res = await reveal(
+      env,
+      { hmac, revealed_by: "operator", reason: "peek" },
+      "wrong-token",
+    );
+    expect(res.status).toBe(401);
+    const count = await (env.DB as FakeD1)
+      .prepare("SELECT COUNT(*) AS n FROM entity_reveals")
+      .first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
+  it("refuses an HMAC with no sealed entity and writes no audit", async () => {
+    const env = makeEnv();
+    const absent = "a".repeat(64);
+    const res = await reveal(env, {
+      hmac: absent,
+      revealed_by: "operator",
+      reason: "looking",
+    });
+    expect(res.status).toBe(404);
+    const count = await (env.DB as FakeD1)
+      .prepare("SELECT COUNT(*) AS n FROM entity_reveals")
+      .first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
+  it("refuses a reveal without a stated reason, writing no audit", async () => {
+    const env = makeEnv();
+    await uploadText(env, "Sandra Bell approved the roster");
+    const hmac = await sealedHmac(env);
+    const res = await reveal(env, { hmac, revealed_by: "operator", reason: "" });
+    expect(res.status).toBe(422);
+    const count = await (env.DB as FakeD1)
+      .prepare("SELECT COUNT(*) AS n FROM entity_reveals")
+      .first<{ n: number }>();
+    expect(count?.n).toBe(0);
+  });
+
+  it("never lists a name without a reveal, and source-facing text stays pseudonymous", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    await callApp(env, `/api/intake/${id}/steps`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        answers: [
+          { q: "story", value: "I told Sandra Bell about the roster", topic: "roster" },
+        ],
+        access_code: code,
+      }),
+    });
+    const hmac = await sealedHmac(env);
+
+    // Before the reveal: no surface lists the name.
+    const linksBefore = await (
+      await callApp(env, "/api/intake/entities/links", {
+        headers: { ...auth, "x-entity-hmac": hmac },
+      })
+    ).text();
+    expect(linksBefore).not.toContain("Sandra");
+
+    await reveal(env, {
+      hmac,
+      revealed_by: "operator",
+      reason: "publication check",
+    });
+
+    // After the reveal: the source's own thread still shows the pseudonym.
+    const thread = await (
+      await callApp(env, `/api/intake/${id}/thread`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ access_code: code }),
+      })
+    ).text();
+    expect(thread).toContain("[person A]");
+    expect(thread).not.toContain("Sandra");
+    // The audit list names the pseudonym and HMAC, never the name.
+    const listed = await (
+      await callApp(env, "/api/intake/entities/reveals", { headers: auth })
+    ).text();
+    expect(listed).not.toContain("Sandra");
+    const linksAfter = await (
+      await callApp(env, "/api/intake/entities/links", {
+        headers: { ...auth, "x-entity-hmac": hmac },
+      })
+    ).text();
+    expect(linksAfter).not.toContain("Sandra");
+  });
+});

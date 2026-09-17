@@ -97,6 +97,7 @@ export function uncoveredSealedColumns(
 export const CIPHERTEXT_AUDIT_COLUMNS: SealedColumn[] = [
   { table: "messages", column: "body_envelope" },
   { table: "entities", column: "name_envelope" },
+  { table: "entity_reveals", column: "record_envelope" },
   { table: "corpus_docs", column: "text_envelope" },
   { table: "corpus_docs", column: "filename" },
   { table: "attachments", column: "filename" },
