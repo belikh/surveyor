@@ -23,7 +23,11 @@ every recipient, and recorded receipts document the disclosure honestly
 - **Grounded research** — angles proposed against your corpus with cited
   exhibits, capped research lines, and a bounded significance judge.
 - **Living reports** — five report types, manual-first publish gates,
-  scheduled or per-N updates, append-only history.
+  scheduled or per-N updates, append-only history. Drafts annotate uncited
+  claims and publish strips them unless the operator explicitly approves
+  them; that enforcement is
+  [measured and published](evidence/report-quality/), with live-model prose
+  quality a recorded gap there, not a claim.
 
 ## Quick start
 

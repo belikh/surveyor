@@ -145,7 +145,12 @@ bucket** until drained.
 
 - **Mitigations**: manual approval is the default; automatic gates are opt-in;
   gate config is stored with the report, never accepted at publish; published
-  history is append-only; held lines are excluded.
+  history is append-only; held lines are excluded. The cite-bound enforcement
+  is measured (`evidence/report-quality/`, D9 #52): across the fixture run no
+  report body carried a quote absent from its source, drafts annotated and
+  versions stripped uncited claims, marker-laden prose fell back to the
+  deterministic render, and held lines or held documents reached no report
+  type.
 - **Residual risk**: an operator who enables full-dynamic on a poisoned corpus
   can publish defamatory material. Legal/defamation gates and a lawyer review
   insertion point remain **fog** (unresolved, out of scope for now).
@@ -210,6 +215,12 @@ and not carried into this repository).
   Workers AI run — the evidence records that as an explicit gap, not a
   number. The PDF page-to-image render step is resolved by ADR-0011
   (browser rasterisation).
+- Report quality on live model prose. The pipeline's enforcement is measured
+  and published (`evidence/report-quality/`, D9 #52): fabricated quotes, held
+  lines, uncited claims and injection markers reach no draft or version in
+  the fixture run. Whether a live provider proposes valid citations and
+  covers the supportable facts is, like the OCR model lanes, only knowable
+  from a live run — the evidence records it as an explicit gap, not a number.
 - Exact minimal scoped-token permission set and deploy-button D1-migration
   reliability.
 - Workers AI per-request image/token ceiling.

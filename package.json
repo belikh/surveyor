@@ -13,6 +13,8 @@
     "smoke:runtime": "bash scripts/runtime-smoke.sh",
     "bakeoff:build": "esbuild test/helpers/bakeoff.ts --bundle --format=esm --platform=node --external:pdfjs-dist --outfile=dist/bakeoff-lib.js --target=node20",
     "bakeoff:ocr": "npm run bakeoff:build && node scripts/ocr-bakeoff.mjs",
+    "quality:build": "esbuild test/helpers/report-quality.ts --bundle --format=esm --platform=node --loader:.sql=text --outfile=dist/report-quality-lib.js --target=node20",
+    "quality:report": "npm run quality:build && node scripts/report-quality.mjs",
     "build:pdf": "esbuild src/frontend/pdf-tools-entry.ts --bundle --format=iife --platform=browser --target=es2022 --outfile=dist/pdf-tools.txt",
     "build:pdf-worker": "esbuild node_modules/pdfjs-dist/legacy/build/pdf.worker.min.mjs --bundle --format=iife --minify --platform=browser --target=es2022 --outfile=dist/pdf.worker.txt",
     "pretest": "npm run build:pdf && npm run build:pdf-worker"
