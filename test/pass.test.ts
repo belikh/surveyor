@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { boot } from "../src/state";
 import { openText, sealText, type VaultKit } from "../src/lib/vault";
-import { runJournalistPass } from "../src/lib/pass";
+import { runJournalistPass, type PassResult } from "../src/lib/pass";
 import { publishReportVersion } from "../src/lib/publish";
 import { gatherEvidence } from "../src/lib/evidence";
 import { GateConfigSchema, type Evidence } from "../src/lib/reports";
 import type { ModelClient } from "../src/lib/serve";
-import app from "../src/index";
+import app, { EngineWorkflow } from "../src/index";
+import type { Bindings } from "../src/env";
 import { FakeD1 } from "./helpers/d1";
 
 const TOKEN = "op-token";
@@ -93,6 +94,45 @@ function client(output: unknown, capture?: { prompt: string }): ModelClient {
       return JSON.stringify(output);
     },
   };
+}
+
+function completion(content: string): Response {
+  return new Response(
+    JSON.stringify({
+      id: "1",
+      object: "chat.completion",
+      created: 0,
+      model: "m",
+      choices: [
+        { index: 0, message: { role: "assistant", content }, finish_reason: "stop" },
+      ],
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+/** A dossier report with its v1 gates and legal records already recorded. */
+async function seedDossierReports(db: FakeD1) {
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('dossier', ?, 'draft', 1, 0, 0, 0, NULL, ?)",
+    )
+    .bind(JSON.stringify(GateConfigSchema.parse({ approved: true })), now)
+    .run();
+  // D7's legal gate covers version 1 for this seed.
+  await db
+    .prepare(
+      "INSERT INTO report_legal_records (id, report_type, version, reply_required, record_envelope, created_at) VALUES ('lr-1', 'dossier', 1, 1, 'seed', ?)",
+    )
+    .bind(now)
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO right_of_reply_attempts (id, report_type, version, outcome, attempted_at, record_envelope, created_at) VALUES ('rr-1', 'dossier', 1, 'no_response', ?, 'seed', ?)",
+    )
+    .bind(now, now)
+    .run();
 }
 
 async function callApp(
@@ -262,21 +302,6 @@ describe("journalist pass at publish", () => {
     return env;
   }
 
-  function completion(content: string): Response {
-    return new Response(
-      JSON.stringify({
-        id: "1",
-        object: "chat.completion",
-        created: 0,
-        model: "m",
-        choices: [
-          { index: 0, message: { role: "assistant", content }, finish_reason: "stop" },
-        ],
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    );
-  }
-
   it("publishes model-written, cite-bound prose, versioned and fenced", async () => {
     const env = await readyEnv();
     vi.stubGlobal("fetch", async () =>
@@ -336,36 +361,13 @@ describe("journalist pass at publish", () => {
 });
 
 describe("publish-path model prose", () => {
-  async function seedReports(db: FakeD1) {
-    const now = new Date().toISOString();
-    await db
-      .prepare(
-        "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('dossier', ?, 'draft', 1, 0, 0, 0, NULL, ?)",
-      )
-      .bind(JSON.stringify(GateConfigSchema.parse({ approved: true })), now)
-      .run();
-    // D7's legal gate covers version 1 for this seed.
-    await db
-      .prepare(
-        "INSERT INTO report_legal_records (id, report_type, version, reply_required, record_envelope, created_at) VALUES ('lr-1', 'dossier', 1, 1, 'seed', ?)",
-      )
-      .bind(now)
-      .run();
-    await db
-      .prepare(
-        "INSERT INTO right_of_reply_attempts (id, report_type, version, outcome, attempted_at, record_envelope, created_at) VALUES ('rr-1', 'dossier', 1, 'no_response', ?, 'seed', ?)",
-      )
-      .bind(now, now)
-      .run();
-  }
-
   async function seed() {
     const env = makeEnv();
     const { kit } = await boot(env as never);
     const db = env.DB as FakeD1;
     await seedDoc(db, kit, "d1", "penalty rates are opaque");
     await seedLine(db, kit, "complete", "Pay opacity");
-    await seedReports(db);
+    await seedDossierReports(db);
     return { db, kit };
   }
 
@@ -408,5 +410,227 @@ describe("publish-path model prose", () => {
       publishReportVersion(db as never, kit, "dossier"),
     ]);
     expect(new Set([a.version, b.version]).size).toBe(2);
+  });
+});
+
+describe("per-pass cap (B12)", () => {
+  async function seedWithProviderReports() {
+    const env = makeEnv();
+    const { kit } = await boot(env as never);
+    const db = env.DB as FakeD1;
+    await seedDoc(db, kit, "d1", "penalty rates are opaque");
+    await seedLine(db, kit, "complete", "Pay opacity");
+    await seedDossierReports(db);
+    return { db, kit };
+  }
+
+  const greedyBlocks = {
+    blocks: [
+      {
+        text: "Prose past the cap.",
+        citations: [{ doc_id: "d1", snippet: "penalty rates" }],
+      },
+    ],
+  };
+
+  it("halts gracefully and records the cap without storing prose", async () => {
+    const { db, kit } = await seedWithProviderReports();
+    const greedy: ModelClient = {
+      tier: "greedy-llm",
+      complete: async (_p, onUsage) => {
+        onUsage?.({ tokens: 50_000 });
+        return JSON.stringify(greedyBlocks);
+      },
+    };
+    const result = await runJournalistPass(
+      db as never,
+      kit,
+      "dossier",
+      greedy,
+      evidence(),
+      false,
+      { tokens: 100 },
+    );
+    expect(result).toBeNull();
+    const turn = (await db
+      .prepare(
+        "SELECT tier, outcome FROM telemetry WHERE label = 'pass:dossier' ORDER BY rowid DESC",
+      )
+      .first()) as { tier: string; outcome: string };
+    expect(turn.tier).toBe("greedy-llm");
+    expect(turn.outcome).toBe("capped");
+  });
+
+  it("publishes the deterministic render when the cap halts the pass", async () => {
+    const { db, kit } = await seedWithProviderReports();
+    const greedy: ModelClient = {
+      tier: "greedy-llm",
+      complete: async (_p, onUsage) => {
+        onUsage?.({ tokens: 50_000 });
+        return JSON.stringify(greedyBlocks);
+      },
+    };
+    const { version } = await publishReportVersion(
+      db as never,
+      kit,
+      "dossier",
+      undefined,
+      greedy,
+    );
+    const row = (await db
+      .prepare(
+        "SELECT body_envelope FROM report_versions WHERE type = 'dossier' AND version = ?",
+      )
+      .bind(version)
+      .first()) as { body_envelope: string };
+    const body = await openText(kit, row.body_envelope);
+    expect(body).toContain("# Evidence dossier");
+    expect(body).not.toContain("Prose past the cap.");
+  });
+});
+
+describe("stored timeline entries (B12)", () => {
+  it("publishes the entries read from report_entries, not re-derived evidence", async () => {
+    const env = makeEnv();
+    const { kit } = await boot(env as never);
+    const db = env.DB as FakeD1;
+    const now = new Date().toISOString();
+    await db
+      .prepare(
+        "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('timeline', ?, 'draft', 1, 0, 0, 0, NULL, ?)",
+      )
+      .bind(JSON.stringify(GateConfigSchema.parse({ approved: true })), now)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO report_legal_records (id, report_type, version, reply_required, record_envelope, created_at) VALUES ('lr-t', 'timeline', 1, 1, 'seed', ?)",
+      )
+      .bind(now)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO right_of_reply_attempts (id, report_type, version, outcome, attempted_at, record_envelope, created_at) VALUES ('rr-t', 'timeline', 1, 'no_response', ?, 'seed', ?)",
+      )
+      .bind(now, now)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO report_entries (id, report_type, position, entry_envelope, created_at) VALUES ('e1', 'timeline', 0, ?, ?)",
+      )
+      .bind(
+        await sealText(
+          kit,
+          JSON.stringify({
+            date: "2026-03",
+            label: "Roster policy change",
+            paragraph: "The roster policy changed.",
+            citations: [{ doc_id: "d1", snippet: "penalty rates" }],
+          }),
+        ),
+        now,
+      )
+      .run();
+
+    const { version } = await publishReportVersion(db as never, kit, "timeline");
+    const row = (await db
+      .prepare(
+        "SELECT body_envelope FROM report_versions WHERE type = 'timeline' AND version = ?",
+      )
+      .bind(version)
+      .first()) as { body_envelope: string };
+    const body = await openText(kit, row.body_envelope);
+    expect(body).toContain("**Roster policy change**");
+    expect(body).toContain("The roster policy changed.");
+    expect(body).toContain("[d1: penalty rates]");
+  });
+});
+
+describe("journalist pass workflow step (B12)", () => {
+  it("runs each enabled type's pass once and reuses it across a resume", async () => {
+    const env = makeEnv();
+    const { kit } = await boot(env as never);
+    const db = env.DB as FakeD1;
+    await seedDoc(db, kit, "d1", "Penalty rates are opaque and widely grieved.");
+    await seedLine(db, kit, "complete", "Pay opacity");
+    await seedDossierReports(db);
+    // Configure a provider so the workflow's liveClient resolves.
+    await callApp(env, "/api/setup", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        kind: "providers",
+        providers: [
+          {
+            kind: "openai-compatible",
+            label: "p",
+            secret_slot: "GROQ_API_KEY",
+            model: "m",
+            base_url: "https://llm.example/v1",
+          },
+        ],
+      }),
+    });
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => {
+      calls++;
+      return completion(
+        JSON.stringify({
+          blocks: [
+            {
+              text: "Workflow prose about pay.",
+              citations: [{ doc_id: "d1", snippet: "Penalty rates are opaque" }],
+            },
+          ],
+        }),
+      );
+    });
+    const wf = new EngineWorkflow({} as ExecutionContext, env as never as Bindings);
+    const memo = new Map<string, unknown>();
+    const names: string[] = [];
+    const step = {
+      do: async (name: string, cb: () => Promise<unknown>) => {
+        names.push(name);
+        if (!memo.has(name)) memo.set(name, await cb());
+        return memo.get(name);
+      },
+    };
+    const run = () => wf.run({ payload: {} } as never, step as never);
+
+    await run();
+    expect(names).toContain("journalist-pass:dossier");
+    expect(calls).toBe(1);
+
+    // Resume: the pass step is memoised, so no second provider call.
+    await run();
+    expect(calls).toBe(1);
+
+    // The memoised pass output feeds the publish path without rebilling.
+    const cached = memo.get("journalist-pass:dossier") as PassResult | null;
+    expect(cached).not.toBeNull();
+    const counting: ModelClient = {
+      tier: "would-call",
+      complete: async () => {
+        calls++;
+        return "junk";
+      },
+    };
+    const { version } = await publishReportVersion(
+      db as never,
+      kit,
+      "dossier",
+      undefined,
+      counting,
+      new Map([["dossier", cached]]),
+    );
+    expect(calls).toBe(1);
+    const row = (await db
+      .prepare(
+        "SELECT body_envelope FROM report_versions WHERE type = 'dossier' AND version = ?",
+      )
+      .bind(version)
+      .first()) as { body_envelope: string };
+    expect(await openText(kit, row.body_envelope)).toContain(
+      "Workflow prose about pay.",
+    );
   });
 });

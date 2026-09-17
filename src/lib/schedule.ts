@@ -4,7 +4,13 @@
 // danger marking (poisoning posture: its renders stay flag-and-gated).
 
 import type { VaultKit } from "./vault";
-import { publishReportVersion, reportRow, GatesUnmet, ReportDisabled } from "./publish";
+import {
+  publishReportVersion,
+  reportRow,
+  GatesUnmet,
+  ReportDisabled,
+  type PassCache,
+} from "./publish";
 import { LegalGateUnmet } from "./legal";
 import { unwrap } from "./evidence";
 import type { ModelClient } from "./serve";
@@ -83,6 +89,23 @@ export interface EvalReceipt {
 
 const REPORT_TYPES = ["briefing", "dossier", "timeline", "snapshot", "longform"] as const;
 
+/** Enabled report types, in stored order: the Workflow's journalist-pass
+ *  targets. A type with no report row has no pass to run. */
+export async function enabledReportTypes(db: D1Database): Promise<string[]> {
+  const rows = unwrap(
+    await db
+      .prepare("SELECT type, enabled FROM reports ORDER BY rowid ASC")
+      .all<{ type: string; enabled: number }>(),
+  );
+  return rows
+    .filter(
+      (r) =>
+        Number(r.enabled) === 1 &&
+        (REPORT_TYPES as readonly string[]).includes(r.type),
+    )
+    .map((r) => r.type);
+}
+
 export const FULL_DYNAMIC_BANNER =
   "> Automatically rendered on new evidence — review before sharing.";
 
@@ -98,6 +121,7 @@ export async function evaluateAll(
   kit: VaultKit,
   nowIso: string,
   client?: ModelClient | null,
+  passes?: PassCache,
 ): Promise<EvalReceipt[]> {
   const rows = unwrap(
     await db
@@ -162,6 +186,7 @@ export async function evaluateAll(
         r.type as (typeof REPORT_TYPES)[number],
         withBaseline.danger ? FULL_DYNAMIC_BANNER : undefined,
         client,
+        passes,
       );
       await db
         .prepare("UPDATE reports SET sched_last_count = ?, sched_total = ? WHERE type = ?")

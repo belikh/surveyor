@@ -368,6 +368,8 @@ describe("Workflow entry", () => {
     expect(names).toEqual([
       "record-line-opened",
       "research-line",
+      "journalist-pass-targets",
+      "journalist-pass:briefing",
       "evaluate-report-frequencies",
     ]);
     const wfTurns = unwrap(
@@ -393,9 +395,13 @@ describe("Workflow entry", () => {
     expect(names).toEqual([
       "record-line-opened",
       "research-line",
+      "journalist-pass-targets",
+      "journalist-pass:briefing",
       "evaluate-report-frequencies",
       "record-line-opened",
       "research-line",
+      "journalist-pass-targets",
+      "journalist-pass:briefing",
       "evaluate-report-frequencies",
     ]);
     const after = await (env.DB as FakeD1)

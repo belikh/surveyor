@@ -50,6 +50,7 @@ import {
   BootstrapError,
 } from "./lib/bootstrap";
 import { liveClient, liveSearchClient, hasSecretValue } from "./lib/providers";
+import type { PassResult } from "./lib/pass";
 import { resolveEntityLinks } from "./lib/entities";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import {
@@ -1024,9 +1025,9 @@ export interface EngineParams {
   angle_id?: string;
 }
 
-/** Staged pipeline entrypoint: research-line bookkeeping and scheduled
- *  digests. Extraction/serving stays with the HTTP paths so steps remain
- *  resumable without duplicating provider calls.
+/** Staged pipeline entrypoint: research-line bookkeeping, the journalist
+ *  passes and scheduled digests. Extraction/serving stays with the HTTP
+ *  paths so steps remain resumable without duplicating provider calls.
  *
  *  The base class must be the runtime's own `WorkflowEntrypoint` (from
  *  `cloudflare:workers`), not a look-alike: workerd addresses this class as
@@ -1072,10 +1073,41 @@ export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
         return runResearchLine(env.DB, st.kit, lineId, client, { web });
       });
     }
+    // Journalist passes (B12, ADR-0010): one resumable step per enabled
+    // report type, each with its own per-pass cap. Step memos hold every
+    // pass output, so a resumed workflow never pays for the same pass twice
+    // and the publish step below reuses what the pass step produced.
+    const passTargets = await step.do("journalist-pass-targets", async () => {
+      const { enabledReportTypes } = await import("./lib/schedule");
+      return enabledReportTypes(env.DB);
+    });
+    const passes = new Map<string, PassResult | null>();
+    for (const type of passTargets) {
+      const pass = await step.do(`journalist-pass:${type}`, async () => {
+        const st = await getState(env);
+        const client = await liveClient(env.DB, env);
+        if (!client) return null;
+        const { gatherEvidence } = await import("./lib/evidence");
+        const { reportRow } = await import("./lib/publish");
+        const { PASS_CAPS, runJournalistPass } = await import("./lib/pass");
+        const evidence = await gatherEvidence(env.DB);
+        const row = await reportRow(env.DB, type);
+        return runJournalistPass(
+          env.DB,
+          st.kit,
+          type,
+          client,
+          evidence,
+          !row.config.allow_uncited,
+          PASS_CAPS,
+        );
+      });
+      passes.set(type, pass);
+    }
     await step.do("evaluate-report-frequencies", async () => {
       const st = await getState(env);
       const client = await liveClient(env.DB, env);
-      return evaluateAll(env.DB, st.kit, new Date().toISOString(), client);
+      return evaluateAll(env.DB, st.kit, new Date().toISOString(), client, passes);
     });
   }
 }
