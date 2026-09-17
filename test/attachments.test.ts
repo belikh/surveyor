@@ -3,7 +3,7 @@ import app from "../src/index";
 import { FakeD1 } from "./helpers/d1";
 import { FakeR2 } from "./helpers/r2";
 import { solveChallenge } from "../src/lib/pow";
-import { sealText } from "../src/lib/vault";
+import { sealText, openText } from "../src/lib/vault";
 import { boot } from "../src/state";
 import {
   ATTACH_TOTAL_BYTES,
@@ -63,11 +63,16 @@ async function upload(
   filename = "scan.png",
   mediaType = "image/png",
 ) {
-  return callApp(
-    env,
-    `/api/intake/${id}/attachments?filename=${encodeURIComponent(filename)}&media_type=${encodeURIComponent(mediaType)}&access_code=${encodeURIComponent(code)}`,
-    { method: "POST", headers: { "content-type": mediaType }, body },
-  );
+  // The post-A11 transport: identifiers in headers, never the query string.
+  return callApp(env, `/api/intake/${id}/attachments`, {
+    method: "POST",
+    headers: {
+      "x-access-code": code,
+      "x-filename": encodeURIComponent(filename),
+      "content-type": mediaType,
+    },
+    body,
+  });
 }
 
 afterEach(() => {
@@ -190,13 +195,48 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     const decoy = await createSubmission(env);
     const missing = await callApp(
       env,
-      `/api/intake/${id}/attachments?filename=x.png&media_type=image/png`,
+      `/api/intake/${id}/attachments`,
       { method: "POST", headers: { "content-type": "image/png" }, body: "x" },
     );
     expect(missing.status).toBe(404);
     const foreign = await upload(env, id, decoy.code, "x");
     expect(foreign.status).toBe(404);
     expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
+  it("never reads the access code or filename from the query string", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    const viaQuery = await callApp(
+      env,
+      `/api/intake/${id}/attachments?access_code=${encodeURIComponent(code)}&filename=x.png&media_type=image%2Fpng`,
+      { method: "POST", headers: { "content-type": "image/png" }, body: "x" },
+    );
+    expect(viaQuery.status).toBe(404);
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
+  it("decodes a percent-encoded filename header and seals it at rest", async () => {
+    const env = makeEnv({
+      AI: { run: async () => ({ answer: "no names here" }) },
+    });
+    const { id, code } = await createSubmission(env);
+    const res = await upload(
+      env,
+      id,
+      code,
+      "fake-scan",
+      "employé roster.png",
+      "image/png",
+    );
+    expect(res.status).toBe(201);
+    const { kit } = await boot(env as never);
+    const row = (await (env.DB as FakeD1)
+      .prepare("SELECT filename, lane FROM attachments")
+      .first()) as { filename: string; lane: string };
+    expect(row.lane).toBe("held-ocr");
+    expect(row.filename.startsWith("v1.")).toBe(true);
+    expect(await openText(kit, row.filename)).toBe("employé roster.png");
   });
 
   it("refuses uploads to a closed submission", async () => {

@@ -268,20 +268,33 @@ function operatorDenied(c: {
 // Submitter attachments (FR-045-FR-050): raw bytes stream through the Worker
 // into a private R2 key, then drain to testimony and are deleted. Filenames
 // are sealed; caps are per-file (50 MB) and per-submission (200 MB).
+//
+// The access code, filename and media type travel in headers — never the
+// query string — so edge request logs cannot see identifiers (A11). The
+// filename header is percent-encoded so non-ASCII names survive.
+function decodeFilename(raw: string | undefined): string {
+  if (!raw) return "attachment";
+  try {
+    return decodeURIComponent(raw).slice(0, 256);
+  } catch {
+    return raw.slice(0, 256);
+  }
+}
+
 intake.post("/:id/attachments", async (c) => {
   const app = await getState(c.env);
   const idOr = idOr404(c);
   if (typeof idOr !== "string") return idOr;
   const id = idOr;
-  const code = c.req.query("access_code") ?? "";
+  const code = c.req.header("x-access-code") ?? "";
   const sub = await submissionByCode(c, id, code);
   if (!sub) return c.json({ error: "not_found" }, 404);
   if (sub.status !== "open") {
     return c.json({ error: "submission_closed" }, 409);
   }
   if (!c.env.CORPUS) return c.json({ error: "attachments_unavailable" }, 503);
-  const filename = (c.req.query("filename") ?? "attachment").slice(0, 256);
-  const mediaType = (c.req.query("media_type") ?? "application/octet-stream").slice(
+  const filename = decodeFilename(c.req.header("x-filename"));
+  const mediaType = (c.req.header("content-type") ?? "application/octet-stream").slice(
     0,
     128,
   );
