@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { Script } from "node:vm";
 import app from "../src/index";
 import { FakeD1 } from "./helpers/d1";
+import { codeChallengeS256, generateCodeVerifier } from "../src/lib/oauth";
 
 function makeEnv(over: Record<string, unknown> = {}) {
   return {
@@ -30,17 +31,43 @@ const configured = () =>
     CF_OAUTH_AUTHORIZE_URL: "https://cf.example/authorize",
     CF_OAUTH_TOKEN_URL: "https://cf.example/token",
     CF_OAUTH_SCOPES: "workers-scripts.write",
-    CF_OAUTH_CLIENT_SECRET: "client-secret-xyz",
   });
 
-async function stateFromStart(env: Record<string, unknown>): Promise<string> {
+/** Start the flow: the redirect carries state + challenge, and the verifier
+ *  comes back in the HttpOnly cookie the callback will read. */
+async function startFlow(env: Record<string, unknown>) {
   const res = await callApp(env, "/api/oauth/start");
-  const loc = res.headers.get("location") ?? "";
-  return new URL(loc).searchParams.get("state") ?? "";
+  const location = new URL(res.headers.get("location") ?? "");
+  const setCookie = res.headers.get("set-cookie") ?? "";
+  const verifier =
+    /surveyor_oauth_verifier=([^;]*)/.exec(setCookie)?.[1] ?? "";
+  return {
+    location,
+    state: location.searchParams.get("state") ?? "",
+    challenge: location.searchParams.get("code_challenge") ?? "",
+    setCookie,
+    verifier,
+    cookie: setCookie.split(";")[0],
+  };
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("PKCE (A4, ADR-0013)", () => {
+  it("derives the RFC 7636 Appendix B S256 challenge", async () => {
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    expect(await codeChallengeS256(verifier)).toBe(
+      "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    );
+  });
+
+  it("generates 43-character verifiers from the unreserved set", () => {
+    const verifier = generateCodeVerifier();
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(generateCodeVerifier()).not.toBe(verifier);
+  });
 });
 
 describe("OAuth consent (R2)", () => {
@@ -49,11 +76,9 @@ describe("OAuth consent (R2)", () => {
     expect(res.status).toBe(404);
   });
 
-  it("redirects to the authorize endpoint with a signed state", async () => {
-    const res = await callApp(configured(), "/api/oauth/start");
-    expect(res.status).toBe(302);
-    const loc = res.headers.get("location") ?? "";
-    const u = new URL(loc);
+  it("redirects with a signed state and an S256 challenge", async () => {
+    const flow = await startFlow(configured());
+    const u = flow.location;
     expect(u.origin + u.pathname).toBe("https://cf.example/authorize");
     expect(u.searchParams.get("client_id")).toBe("client-123");
     expect(u.searchParams.get("redirect_uri")).toBe(
@@ -61,21 +86,42 @@ describe("OAuth consent (R2)", () => {
     );
     expect(u.searchParams.get("scope")).toBe("workers-scripts.write");
     expect(u.searchParams.get("state")).toBeTruthy();
+    expect(u.searchParams.get("code_challenge_method")).toBe("S256");
+    // The challenge is the verifier's digest, and the verifier is held in
+    // an HttpOnly cookie scoped to the callback path.
+    expect(flow.challenge).toBe(await codeChallengeS256(flow.verifier));
+    expect(flow.setCookie).toMatch(/HttpOnly/);
+    expect(flow.setCookie).toMatch(/Path=\/api\/oauth/);
+    expect(flow.setCookie).toMatch(/SameSite=Lax/);
   });
 
   it("rejects a tampered state", async () => {
     const env = configured();
-    await stateFromStart(env);
+    const flow = await startFlow(env);
     const res = await callApp(
       env,
       "/api/oauth/callback?code=abc&state=123.forged",
+      { headers: { cookie: flow.cookie } },
     );
     expect(res.status).toBe(400);
   });
 
-  it("exchanges the code and returns the token in the fragment only", async () => {
+  it("refuses a callback that carries no verifier cookie", async () => {
     const env = configured();
-    const state = await stateFromStart(env);
+    const flow = await startFlow(env);
+    const res = await callApp(
+      env,
+      `/api/oauth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "missing_code_verifier",
+    );
+  });
+
+  it("exchanges the code with the verifier, no client secret, fragment only", async () => {
+    const env = configured();
+    const flow = await startFlow(env);
     let sentBody = "";
     vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
       expect(String(url)).toBe("https://cf.example/token");
@@ -86,12 +132,17 @@ describe("OAuth consent (R2)", () => {
     });
     const res = await callApp(
       env,
-      `/api/oauth/callback?code=abc&state=${encodeURIComponent(state)}`,
+      `/api/oauth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+      { headers: { cookie: flow.cookie } },
     );
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/#cf_token=at-123");
     expect(sentBody).toContain("code=abc");
     expect(sentBody).toContain("client_id=client-123");
+    expect(sentBody).toContain(`code_verifier=${flow.verifier}`);
+    expect(sentBody).not.toContain("client_secret");
+    // The verifier cookie is cleared once spent.
+    expect(res.headers.get("set-cookie") ?? "").toMatch(/Max-Age=0/);
     // The token never appears in a persisted row.
     const db = env.DB as FakeD1;
     const dump = JSON.stringify([
@@ -103,7 +154,7 @@ describe("OAuth consent (R2)", () => {
 
   it("fails loud on a token-endpoint error without echoing the body", async () => {
     const env = configured();
-    const state = await stateFromStart(env);
+    const flow = await startFlow(env);
     vi.stubGlobal(
       "fetch",
       async () =>
@@ -111,7 +162,8 @@ describe("OAuth consent (R2)", () => {
     );
     const res = await callApp(
       env,
-      `/api/oauth/callback?code=abc&state=${encodeURIComponent(state)}`,
+      `/api/oauth/callback?code=abc&state=${encodeURIComponent(flow.state)}`,
+      { headers: { cookie: flow.cookie } },
     );
     expect(res.status).toBe(502);
     const text = await res.text();

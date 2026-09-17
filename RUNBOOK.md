@@ -118,7 +118,6 @@ are listed as not-wiped.
 | `TURNSTILE_SECRET` | Optional | Operator |
 | `TURNSTILE_SITEKEY` | Optional (var, not a secret) | Operator |
 | `CF_OAUTH_CLIENT_ID` + endpoints | Optional (vars) | Operator |
-| `CF_OAUTH_CLIENT_SECRET` | Optional | Operator |
 | `PUBLIC_BASE_URL` | Required for launch packs (optional otherwise) | Operator |
 
 Never paste a secret value into a transcript, issue, or commit.

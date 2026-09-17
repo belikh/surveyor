@@ -26,11 +26,14 @@ import {
   DEFAULT_TOKEN_URL,
   DEFAULT_SCOPES,
   authorizeUrl,
+  codeChallengeS256,
   exchangeOAuthCode,
+  generateCodeVerifier,
   signState,
   verifyState,
   type OAuthConfig,
 } from "./lib/oauth";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import {
   provisionStack,
   teardownStack,
@@ -500,10 +503,16 @@ app.delete("/api/providers/key/:slot", async (c) => {
   return c.json({ ok: true, slot });
 });
 
-// OAuth consent (R2). The installation advertises whether it can run the
-// flow; the operator clicks "Connect Cloudflare", consents, and the
-// transient token returns to the wizard in the URL fragment (client-side
-// only). Nothing here stores the token.
+// OAuth consent (R2, ADR-0013). PKCE public client: the start redirect
+// carries an S256 challenge and a signed state; the verifier is held in an
+// HttpOnly cookie scoped to the callback path, so it never rides in a URL
+// and never reaches D1. The operator clicks "Connect Cloudflare", consents,
+// and the transient token returns to the wizard in the URL fragment
+// (client-side only). Nothing here stores the token or sends a client
+// secret.
+const OAUTH_VERIFIER_COOKIE = "surveyor_oauth_verifier";
+const OAUTH_VERIFIER_TTL_S = 10 * 60;
+
 function oauthConfig(env: Bindings, origin: string): OAuthConfig {
   return {
     clientId: env.CF_OAUTH_CLIENT_ID ?? "",
@@ -519,8 +528,20 @@ app.get("/api/oauth/start", async (c) => {
   const clientId = c.env.CF_OAUTH_CLIENT_ID;
   if (!clientId) return c.json({ error: "oauth_not_configured" }, 404);
   const origin = new URL(c.req.url).origin;
+  const verifier = generateCodeVerifier();
   const state = await signState(app.kit, Date.now());
-  return c.redirect(authorizeUrl(oauthConfig(c.env, origin), state), 302);
+  setCookie(c, OAUTH_VERIFIER_COOKIE, verifier, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/api/oauth",
+    maxAge: OAUTH_VERIFIER_TTL_S,
+  });
+  const challenge = await codeChallengeS256(verifier);
+  return c.redirect(
+    authorizeUrl(oauthConfig(c.env, origin), state, challenge),
+    302,
+  );
 });
 
 app.get("/api/oauth/callback", async (c) => {
@@ -529,7 +550,10 @@ app.get("/api/oauth/callback", async (c) => {
   if (!clientId) return c.json({ error: "oauth_not_configured" }, 404);
   const code = c.req.query("code");
   const state = c.req.query("state") ?? "";
+  const verifier = getCookie(c, OAUTH_VERIFIER_COOKIE) ?? "";
+  deleteCookie(c, OAUTH_VERIFIER_COOKIE, { path: "/api/oauth" });
   if (!code) return c.json({ error: "missing_code" }, 400);
+  if (!verifier) return c.json({ error: "missing_code_verifier" }, 400);
   if (!(await verifyState(app.kit, state, Date.now()))) {
     return c.json({ error: "bad_state" }, 400);
   }
@@ -537,8 +561,8 @@ app.get("/api/oauth/callback", async (c) => {
   try {
     const token = await exchangeOAuthCode(
       oauthConfig(c.env, origin),
-      c.env.CF_OAUTH_CLIENT_SECRET ?? "",
       code,
+      verifier,
     );
     // Fragment, not query: never sent to or logged by the server.
     return c.redirect(`/#cf_token=${encodeURIComponent(token)}`, 302);
@@ -750,7 +774,6 @@ const PROVISION_SECRETS = [
   { slot: "GROQ_API_KEY", generate: false },
   { slot: "TOKENROUTER_API_KEY", generate: false },
   { slot: "TURNSTILE_SECRET", generate: false },
-  { slot: "CF_OAUTH_CLIENT_SECRET", generate: false },
 ];
 
 // Runtime provision (R3): the operator consents through OAuth, then the

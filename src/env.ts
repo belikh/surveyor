@@ -27,11 +27,9 @@ export interface Bindings {
    *  secret is set, so the survey shell can render the widget. A sitekey
    *  is public by design — it is not a secret. */
   TURNSTILE_SITEKEY?: string;
-  // Wizard OAuth consent (R2): Cloudflare OAuth client + endpoints. The
-  // client id and endpoints are public; the client secret (if used) is a
-  // Worker secret and never persists to the installation's own state.
+  // Wizard OAuth consent (R2, ADR-0013): PKCE public client. The client id
+  // and endpoints are public vars; no client secret is embedded or sent.
   CF_OAUTH_CLIENT_ID?: string;
-  CF_OAUTH_CLIENT_SECRET?: string;
   CF_OAUTH_AUTHORIZE_URL?: string;
   CF_OAUTH_TOKEN_URL?: string;
   CF_OAUTH_SCOPES?: string;

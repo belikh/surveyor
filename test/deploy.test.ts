@@ -42,7 +42,6 @@ describe("wrangler config", () => {
       "GROQ_API_KEY",
       "TOKENROUTER_API_KEY",
       "TURNSTILE_SECRET",
-      "CF_OAUTH_CLIENT_SECRET",
       "PUBLIC_BASE_URL",
     ]) {
       const re = new RegExp(`^\\s*${slot}\\s*[=:]\\s*"`, "m");
@@ -67,7 +66,6 @@ describe("wrangler config", () => {
       "GROQ_API_KEY",
       "TOKENROUTER_API_KEY",
       "TURNSTILE_SECRET",
-      "CF_OAUTH_CLIENT_SECRET",
       "PUBLIC_BASE_URL",
     ]);
     // Bindings come from wrangler sections; vars from [vars].
