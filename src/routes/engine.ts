@@ -13,6 +13,7 @@ import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
 import { proposeAndStoreAngles } from "../lib/angles";
 import { finishLine } from "../lib/research";
+import { SnapshotError, snapshotPage } from "../lib/snapshot";
 
 export const engine = new Hono<{ Bindings: Bindings }>();
 
@@ -37,7 +38,8 @@ const LineSchema = z.object({
 });
 
 const CitationSchema = z.object({
-  doc_id: z.string().min(1).max(128),
+  doc_id: z.string().min(1).max(128).optional(),
+  snapshot_id: z.string().min(1).max(128).optional(),
   snippet: z.string().min(1).max(2000),
 });
 
@@ -299,6 +301,39 @@ engine.post("/lines/:id/review", async (c) => {
     "UPDATE research_lines SET status = ? WHERE id = ?",
   ).bind(next, id.data).run();
   return c.json({ id: id.data, status: next });
+});
+
+const SnapshotSchema = z.object({
+  url: z.string().url().max(2048),
+});
+
+// Snapshot store (B7, ADR-0017): fetch a URL installation-side and keep the
+// immutable evidence copy a web citation validates against. The response is
+// provenance metadata only — snapshot text stays private to the engine and
+// the raw capture stays in object storage.
+engine.post("/snapshots", async (c) => {
+  const app = await getState(c.env);
+  const parsed = SnapshotSchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  try {
+    const capture = await snapshotPage(
+      { db: c.env.DB, kit: app.kit, r2: c.env.CORPUS, ai: c.env.AI },
+      parsed.data.url,
+    );
+    const { text: _text, ...snapshot } = capture;
+    return c.json({ ok: true, snapshot });
+  } catch (err) {
+    if (err instanceof SnapshotError) {
+      const status =
+        err.code === "no_extractor" || err.code === "no_storage"
+          ? 503
+          : err.code === "fetch_failed"
+            ? 502
+            : 422;
+      return c.json({ error: err.code, detail: err.message }, status);
+    }
+    throw err;
+  }
 });
 
 engine.get("/lines/:id", async (c) => {

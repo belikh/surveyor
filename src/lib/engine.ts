@@ -174,6 +174,13 @@ export function injectionFlags(text: string): string[] {
   return flags;
 }
 
+/** Minimal citation shape: corpus and web citations both carry a snippet. */
+export interface SnippetRef {
+  doc_id?: string;
+  snapshot_id?: string;
+  snippet: string;
+}
+
 /**
  * Suspicion flags for a claim and its citations: injection markers, or no
  * exhibits at all. Snippets are scanned too — they render verbatim into
@@ -182,7 +189,7 @@ export function injectionFlags(text: string): string[] {
  */
 export function flagSuspicious(
   claim: string,
-  exhibits: Exhibit[],
+  exhibits: SnippetRef[],
 ): string[] {
   const flags: string[] = [];
   for (const text of [claim, ...exhibits.map((e) => e.snippet)]) {

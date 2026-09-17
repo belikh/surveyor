@@ -10,6 +10,7 @@ import { z } from "zod";
 import { searchMirror } from "./rounds";
 import { flagSuspicious } from "./engine";
 import { openText, sealText, type VaultKit } from "./vault";
+import { validateWebCitation } from "./snapshot";
 import { recordTurn } from "./telemetry";
 import type { ModelClient } from "./serve";
 
@@ -41,7 +42,10 @@ export interface LoopBudget {
 }
 
 export interface Citation {
-  doc_id: string;
+  /** Corpus evidence: the mirrored document's id. */
+  doc_id?: string;
+  /** Web evidence: the immutable snapshot's id (ADR-0017). */
+  snapshot_id?: string;
   snippet: string;
 }
 
@@ -108,7 +112,8 @@ const ActionSchema = z.union([
     citations: z
       .array(
         z.object({
-          doc_id: z.string().min(1).max(128),
+          doc_id: z.string().min(1).max(128).optional(),
+          snapshot_id: z.string().min(1).max(128).optional(),
           snippet: z.string().min(1).max(2000),
         }),
       )
@@ -132,7 +137,7 @@ function excerpt(text: string, terms: string[]): string {
 
 function draftFinding(angle: AngleBrief, citations: Citation[]): string {
   const excerpts = citations
-    .map((c) => `"${c.snippet}" (${c.doc_id})`)
+    .map((c) => `"${c.snippet}" (${c.doc_id ?? c.snapshot_id})`)
     .join("; ");
   return (
     `Research on "${angle.title}" found ${citations.length} grounded ` +
@@ -284,7 +289,13 @@ export async function liveLoop(
       continue;
     }
     const citations = action.citations.filter((ci) => {
-      const text = fetched.get(ci.doc_id);
+      const key =
+        ci.snapshot_id !== undefined && ci.doc_id === undefined
+          ? `snapshot:${ci.snapshot_id}`
+          : ci.doc_id !== undefined && ci.snapshot_id === undefined
+            ? ci.doc_id
+            : "";
+      const text = fetched.get(key);
       return text !== undefined && text.includes(ci.snippet);
     });
     if (citations.length > 0) {
@@ -308,8 +319,9 @@ export type FinishResult =
 /**
  * The one completion path, shared by the operator route and the workflow:
  * citations are the price of completion, every cited doc must be in the
- * mirror and every snippet must occur verbatim in its gated text, and
- * suspicious findings are held rather than stored complete.
+ * mirror and every snippet must occur verbatim in its gated text, every
+ * cited snapshot must still hash to its recorded digest and contain its
+ * snippet, and suspicious findings are held rather than stored complete.
  */
 export async function finishLine(
   db: D1Database,
@@ -338,10 +350,37 @@ export async function finishLine(
   if (line.spend_used > line.spend_cap) {
     return { ok: false, error: "over_cap" };
   }
-  // Validate each citation against its source text, never against the
-  // existence of a row: the snippet must occur verbatim in the mirrored
-  // text, so a composed quote cannot complete a line.
+  // Validate each citation against its evidence copy, never against the
+  // existence of a row: a corpus snippet must occur verbatim in the mirrored
+  // text, and a web snippet must occur in the immutable snapshot the
+  // installation fetched — never the live URL, and never a provider's
+  // search fragment. A composed quote cannot complete a line either way.
+  const citationFlags: string[] = [];
   for (const ci of completion.citations) {
+    const isCorpus = ci.doc_id !== undefined && ci.snapshot_id === undefined;
+    const isWeb = ci.snapshot_id !== undefined && ci.doc_id === undefined;
+    // Exactly one evidence copy per citation: a row naming both (or
+    // neither) is ambiguous and never valid.
+    if (!isCorpus && !isWeb) {
+      return {
+        ok: false,
+        error: "invalid_citation",
+        detail: ci.doc_id ?? ci.snapshot_id ?? "missing",
+      };
+    }
+    if (isWeb) {
+      const check = await validateWebCitation(
+        db,
+        kit,
+        ci.snapshot_id as string,
+        ci.snippet,
+      );
+      if (!check.ok) {
+        return { ok: false, error: check.error, detail: check.detail };
+      }
+      citationFlags.push(...check.flags);
+      continue;
+    }
     const row = await db
       .prepare(
         `SELECT text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED}`,
@@ -361,7 +400,12 @@ export async function finishLine(
       return { ok: false, error: "invalid_citation", detail: ci.doc_id };
     }
   }
-  const flags = flagSuspicious(completion.findings, completion.citations);
+  const flags = [
+    ...new Set([
+      ...citationFlags,
+      ...flagSuspicious(completion.findings, completion.citations),
+    ]),
+  ];
   const status = flags.length > 0 ? "held" : "complete";
   await db
     .prepare(

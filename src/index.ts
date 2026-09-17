@@ -742,6 +742,7 @@ const RESEAL_COLUMNS: Array<{
   { table: "attachments", column: "filename", key: "id" },
   { table: "corpus_docs", column: "text_envelope", key: "id" },
   { table: "corpus_docs", column: "filename", key: "id" },
+  { table: "web_snapshots", column: "text_envelope", key: "id" },
   { table: "angles", column: "rationale_envelope", key: "id" },
   { table: "research_lines", column: "findings_envelope", key: "id" },
   { table: "report_versions", column: "body_envelope", key: "id" },

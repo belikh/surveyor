@@ -87,6 +87,28 @@ CREATE TABLE IF NOT EXISTS corpus_docs (
 -- entities; a mirror scan proving zero entity names runs against this.
 CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(doc_id, text);
 
+-- Immutable web snapshots (B7, ADR-0017): the evidence target for a web
+-- citation, never the live URL. The raw capture lives in private object
+-- storage under r2_key; the extracted text is sealed here and its SHA-256
+-- is the tamper check validation re-runs. Search results are transient
+-- pointers and never land in this table.
+CREATE TABLE IF NOT EXISTS web_snapshots (
+  id TEXT PRIMARY KEY,
+  requested_url TEXT NOT NULL,
+  final_url TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  http_status INTEGER NOT NULL,
+  content_type TEXT NOT NULL,
+  content_sha256 TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  extractor TEXT NOT NULL,
+  extractor_version TEXT NOT NULL,
+  r2_key TEXT NOT NULL,
+  text_envelope TEXT NOT NULL,
+  flags_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS launch (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   slug TEXT NOT NULL,
