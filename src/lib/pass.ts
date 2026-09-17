@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import { MIRRORED_SQL } from "./mirror";
+import { injectionFlags } from "./engine";
 import { unwrap } from "./evidence";
 import type { Evidence } from "./reports";
 import { openText, sealText, type VaultKit } from "./vault";
@@ -180,6 +181,22 @@ export async function runJournalistPass(
     cites.filter((c) => byId.get(c.doc_id)?.includes(c.snippet) ?? false);
 
   if (type === "timeline") {
+    // Stored entries are the timeline's source of truth and re-render
+    // deterministically, so the publish-time marker review cannot un-store
+    // them: a marker anywhere in the pass rejects the whole output before
+    // anything is written, exactly as it rejects any other report's prose.
+    const flagged = (parsed.entries ?? []).some(
+      (e) => injectionFlags(`${e.label}\n${e.paragraph}`).length > 0,
+    );
+    if (flagged) {
+      await recordTurn(db, {
+        tier: client.tier,
+        toolCalls: 0,
+        label: `pass:${type}`,
+        outcome: "injection-marker",
+      });
+      return null;
+    }
     const entries: TimelineEntry[] = [];
     let uncited = 0;
     for (const e of parsed.entries ?? []) {
