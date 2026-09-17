@@ -49,6 +49,7 @@ function stubCloudflare(
   existingSecrets: string[] = [],
 ) {
   const puts: string[] = [];
+  const bodies: Record<string, unknown> = {};
   vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
     const u = String(url);
     const m = (init?.method ?? "GET").toUpperCase();
@@ -59,6 +60,10 @@ function stubCloudflare(
     if (m === "POST" && u.endsWith("/d1/database")) return json({ uuid: "d1-1" });
     if (m === "POST" && u.endsWith("/r2/buckets")) return json({});
     if (m === "POST" && u.endsWith("/queues")) return json({ queue_id: "q-1" });
+    if (m === "PUT" && u.endsWith("/schedules")) {
+      bodies.schedules = JSON.parse(String(init.body));
+      return json({ schedules: bodies.schedules });
+    }
     if (m === "PUT" && u.endsWith("/secrets")) {
       const body = JSON.parse(String(init.body)) as { name: string };
       puts.push(body.name);
@@ -69,7 +74,7 @@ function stubCloudflare(
     if (m === "GET" && u.includes("/objects")) return json([]);
     return json({});
   });
-  return { puts };
+  return { puts, bodies };
 }
 
 async function provision(env: Record<string, unknown>) {
@@ -115,6 +120,17 @@ describe("runtime provision (R3)", () => {
         "written",
       ]);
     }
+  });
+
+  it("sends the schedules body in the live array shape (A16)", async () => {
+    const { bodies } = stubCloudflare();
+    const env = makeEnv();
+    const res = await provision(env);
+    expect(res.status).toBe(200);
+    // The live endpoint takes a bare [{cron}] array — {crons:[...]} answers
+    // 502 "Could not parse request body" (observed against a real account
+    // 2026-09-17).
+    expect(bodies.schedules).toEqual([{ cron: "0 6 * * *" }]);
   });
 
   it("re-provisions without rotating existing keys or the operator token (A2)", async () => {

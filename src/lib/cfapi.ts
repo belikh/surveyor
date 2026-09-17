@@ -139,10 +139,13 @@ export function createCloudflareApi(ctx: CfApiContext): CloudflareApi {
       return name;
     },
     async putCronTrigger(name) {
+      // The schedules endpoint takes a bare array of {cron} objects, not a
+      // {crons:[...]} wrapper — proven live by the A16 trial, which 502d on
+      // "Could not parse request body" until the shape matched the API docs.
       await call<unknown>(
         "PUT",
         `/workers/scripts/${encodeURIComponent(name)}/schedules`,
-        { crons: ["0 6 * * *"] },
+        [{ cron: "0 6 * * *" }],
       );
       return true;
     },

@@ -246,6 +246,15 @@ if confirm "Run npm ci, build, and wrangler deploy now"; then
   npm ci
   npm run build
   export CLOUDFLARE_API_TOKEN="$CF_API_TOKEN"
+  # Wrangler 4 prefers CLOUDFLARE_ACCOUNT_ID and prints a deprecation
+  # notice for CF_ACCOUNT_ID that would poison JSON parsing below: every
+  # wrangler call runs with the old name hidden.
+  wr() { env -u CF_ACCOUNT_ID CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID" npx wrangler "$@"; }
+  # Parse wrangler JSON from the first [ or { — notices and banners on
+  # stdout must never break id extraction.
+  parse_uuid() {
+    node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s.slice(s.search(/[[{]/)));if(j&&typeof j==="object"&&!Array.isArray(j)&&(j.uuid||j.database_id)){console.log(j.uuid||j.database_id);return}const a=Array.isArray(j)?j:(j.d1_databases||j.databases||[]);const h=a.find(d=>d.name==="surveyor-db");console.log(h?(h.uuid||h.database_id):"")}catch(e){}})'
+  }
   say "wrangler refuses the placeholder D1 id, so the database is created"
   say "(or found by name) and its real id is written into wrangler.toml."
   say "A backup is taken first and restored at stage 10: the real id must"
@@ -254,16 +263,16 @@ if confirm "Run npm ci, build, and wrangler deploy now"; then
   LIST_OUT=""
   DB_ID=""
   say "creating the D1 database (wrangler prints its id; an existing name falls back to lookup):"
-  CREATE_OUT="$(npx wrangler d1 create surveyor-db 2>&1 || true)"
+  CREATE_OUT="$(wr d1 create surveyor-db 2>&1 || true)"
   DB_ID="$(printf '%s' "$CREATE_OUT" | grep -oE 'database_id = "[0-9a-f-]+"' | head -n1 | cut -d'"' -f2 || true)"
   if [[ -z "$DB_ID" ]]; then
     say "reading its id by name (d1 info, then d1 list):"
-    INFO_OUT="$(npx wrangler d1 info surveyor-db --json 2>&1 || true)"
-    DB_ID="$(printf '%s' "$INFO_OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{let j=JSON.parse(s);if(Array.isArray(j))j=j[0];console.log(j.uuid||j.database_id||"")}catch(e){}})' || true)"
+    INFO_OUT="$(wr d1 info surveyor-db --json 2>&1 || true)"
+    DB_ID="$(printf '%s' "$INFO_OUT" | parse_uuid || true)"
   fi
   if [[ -z "$DB_ID" ]]; then
-    LIST_OUT="$(npx wrangler d1 list --json 2>&1 || true)"
-    DB_ID="$(printf '%s' "$LIST_OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{let j=JSON.parse(s);const a=Array.isArray(j)?j:(j.d1_databases||j.databases||[]);const h=a.find(d=>d.name==="surveyor-db");console.log(h?(h.uuid||h.database_id):"")}catch(e){}})' || true)"
+    LIST_OUT="$(wr d1 list --json 2>&1 || true)"
+    DB_ID="$(printf '%s' "$LIST_OUT" | parse_uuid || true)"
   fi
   if [[ -z "$DB_ID" ]]; then
     warn "could not resolve the D1 id. Raw outputs for diagnosis:"
@@ -277,10 +286,10 @@ if confirm "Run npm ci, build, and wrangler deploy now"; then
   # corpus bucket or confirm it exists before deploying.
   say "creating the R2 bucket (or confirming it exists):"
   R2_OUT=""
-  if ! npx wrangler r2 bucket list 2>/dev/null | grep -q "surveyor-corpus"; then
-    R2_OUT="$(npx wrangler r2 bucket create surveyor-corpus 2>&1 || true)"
+  if ! wr r2 bucket list 2>/dev/null | grep -q "surveyor-corpus"; then
+    R2_OUT="$(wr r2 bucket create surveyor-corpus 2>&1 || true)"
   fi
-  if ! npx wrangler r2 bucket list 2>/dev/null | grep -q "surveyor-corpus"; then
+  if ! wr r2 bucket list 2>/dev/null | grep -q "surveyor-corpus"; then
     warn "the surveyor-corpus bucket is missing."
     if printf '%s' "$R2_OUT" | grep -q "10042\|enable R2"; then
       say "R2 is not enabled on this Cloudflare account yet — enabling it is"
@@ -296,7 +305,7 @@ if confirm "Run npm ci, build, and wrangler deploy now"; then
     warn "record it in the findings file."
     exit 1
   fi
-  npx wrangler deploy
+  wr deploy
   unset CLOUDFLARE_API_TOKEN
 fi
 say "The worker URL looks like https://surveyor.<you>.workers.dev"
