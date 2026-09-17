@@ -101,9 +101,9 @@ function writeCredentials(rows) {
     "# Throwaway local test identities for the Niro-started checkout runtime.",
     "credentials:",
     "  - credential_id: OPERATOR",
-    '    description: "Operator bearer token for the local Surveyor app. Every operator-gated route accepts `Authorization: Bearer <secret>`: /api/corpus, /api/telemetry, /api/audit/ciphertext, and the operator actions under /api/engine and /api/reports. This is a throwaway token for the local run, not a deployed installation."',
+    '    description: "Operator bearer token for the local Surveyor app. Send it as the Authorization header value (Niro sends the secret verbatim; the app also accepts an optional `Bearer ` prefix). Every operator-gated route accepts it: /api/corpus, /api/telemetry, /api/audit/ciphertext, and the operator actions under /api/engine and /api/reports. This is a throwaway token for the local run, not a deployed installation."',
     "    type: bearer_token",
-    `    secret: ${yamlString("Bearer test-op-token")}`,
+    `    secret: ${yamlString("test-op-token")}`,
   ];
   for (const row of rows) {
     lines.push(

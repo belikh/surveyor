@@ -104,6 +104,29 @@ are listed as not-wiped.
 | `TURNSTILE_SITEKEY` | Optional (var, not a secret) | Operator |
 | `CF_OAUTH_CLIENT_ID` + endpoints | Optional (vars) | Operator |
 | `CF_OAUTH_CLIENT_SECRET` | Optional | Operator |
-| `PUBLIC_BASE_URL` | Optional | Operator |
+| `PUBLIC_BASE_URL` | Required for launch packs (optional otherwise) | Operator |
 
 Never paste a secret value into a transcript, issue, or commit.
+
+## Key rotation and re-sealing
+
+`SERVER_SECRET` and `ENCRYPTION_KEY` are the installation's key material. The
+runtime refuses to boot without them — there is no development fallback — so
+an installation that ever ran on placeholder key material must rotate before
+collecting testimony.
+
+1. Set new `SERVER_SECRET` and `ENCRYPTION_KEY` worker secrets.
+2. Re-seal existing rows with the previous pair, operator-gated:
+
+   ```sh
+   curl -s -X POST "$BASE/api/audit/reseal" \
+     -H "authorization: Bearer $OPERATOR_TOKEN" -H 'content-type: application/json' \
+     -d '{"old_server_secret":"<previous>","old_encryption_key":"<previous>"}'
+   ```
+
+   The route opens every `v1.` envelope with the supplied old kit, writes it
+   back with the current kit, and skips rows that are already current.
+3. Confirm `GET /api/audit/ciphertext` reports `ok: true`.
+
+Rows sealed under a key you no longer hold cannot be recovered. `GET
+/api/status` reports `provisioned: false` while key material is missing.

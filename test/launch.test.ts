@@ -10,6 +10,7 @@ function makeEnv() {
     OPERATOR_TOKEN: TOKEN,
     SERVER_SECRET: "server-secret-for-tests",
     ENCRYPTION_KEY: "e".padEnd(64, "0"),
+    PUBLIC_BASE_URL: "https://survey.example",
   };
 }
 
@@ -144,5 +145,13 @@ describe("launch pack audit wiring", () => {
       headers: auth,
     });
     expect(res.status).toBe(422);
+  });
+
+  it("refuses to build links without a configured public base URL", async () => {
+    const env = { ...makeEnv(), PUBLIC_BASE_URL: "" };
+    const res = await callApp(env, "/api/launch-pack", { headers: auth });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as Record<string, string>;
+    expect(body.error).toBe("public_base_url_required");
   });
 });

@@ -9,6 +9,8 @@ function makeEnv(secrets: Record<string, string> = {}) {
   return {
     DB: new FakeD1() as never,
     OPERATOR_TOKEN: TOKEN,
+    SERVER_SECRET: "server-secret-for-tests",
+    ENCRYPTION_KEY: "e".padEnd(64, "0"),
     ...secrets,
   };
 }
@@ -99,15 +101,19 @@ describe("GET /api/providers", () => {
 });
 
 describe("GET /api/status", () => {
-  it("is public and carries booleans plus warning copy only", async () => {
-    const env = makeEnv();
+  it("is public and carries booleans plus warning copy only", async () => {    const env = makeEnv();
     await setupWithProviders(env, []);
     const body = (await (
       await callApp(env, "/api/status")
     ).json()) as Record<string, unknown>;
     expect(body.degraded).toBe(true);
     expect(body.warning).toMatch(/static fallback/i);
-    expect(Object.keys(body).sort()).toEqual(["degraded", "warning"]);
+    expect(body.provisioned).toBe(true);
+    expect(Object.keys(body).sort()).toEqual([
+      "degraded",
+      "provisioned",
+      "warning",
+    ]);
   });
 });
 
@@ -143,7 +149,9 @@ describe("save-time validation wired into POST /api/setup", () => {
     });
     expect(res.status).toBe(200);
     const saved = (await (
-      await callApp(env, "/api/setup")
+      await callApp(env, "/api/setup", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })
     ).json()) as Record<string, unknown>;
     const text = JSON.stringify(saved);
     expect(text).not.toContain('"apiKey"');
@@ -248,7 +256,12 @@ describe("secret-slot choke point", () => {
 
   it("drops pre-existing hostile entries on boot", async () => {
     const db = new FakeD1();
-    const first = { DB: db as never, OPERATOR_TOKEN: TOKEN };
+    const first = {
+      DB: db as never,
+      OPERATOR_TOKEN: TOKEN,
+      SERVER_SECRET: "server-secret-for-tests",
+      ENCRYPTION_KEY: "e".padEnd(64, "0"),
+    };
     await callApp(first, "/api/status"); // boot the schema
     const stored = {
       phase: "ready",
@@ -270,7 +283,13 @@ describe("secret-slot choke point", () => {
       .prepare("INSERT INTO setup_state (id, state_json) VALUES (1, ?)")
       .bind(JSON.stringify(stored))
       .run();
-    const second = { DB: db as never, OPERATOR_TOKEN: TOKEN, GROQ_API_KEY: "k" };
+    const second = {
+      DB: db as never,
+      OPERATOR_TOKEN: TOKEN,
+      GROQ_API_KEY: "k",
+      SERVER_SECRET: "server-secret-for-tests",
+      ENCRYPTION_KEY: "e".padEnd(64, "0"),
+    };
     const chain = (await (
       await callApp(second, "/api/providers", {
         headers: { authorization: `Bearer ${TOKEN}` },
@@ -339,5 +358,43 @@ describe("POST /api/providers/validate", () => {
     const text = await res.text();
     expect(text).toMatch(/401/);
     expect(text).not.toContain("sk-live-secret");
+  });
+});
+
+describe("public setup view", () => {
+  it("redacts provider entries without the operator token", async () => {
+    const env = makeEnv({ GROQ_API_KEY: "k" });
+    await setupWithProviders(env, [
+      { kind: "groq", label: "g", secret_slot: "GROQ_API_KEY", model: "m" },
+    ]);
+    const anon = (await (
+      await callApp(env, "/api/setup")
+    ).json()) as Record<string, unknown>;
+    expect(anon.providers).toBeUndefined();
+    expect(anon.phase).toBe("corpus");
+
+    const authed = (await (
+      await callApp(env, "/api/setup", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })
+    ).json()) as Record<string, unknown>;
+    expect(Array.isArray(authed.providers)).toBe(true);
+  });
+});
+
+describe("provisioning", () => {
+  it("fails closed and reports provisioned:false without key material", async () => {
+    const env = { DB: new FakeD1() as never, OPERATOR_TOKEN: TOKEN };
+    const status = (await (
+      await callApp(env, "/api/status")
+    ).json()) as Record<string, unknown>;
+    expect(status.provisioned).toBe(false);
+    expect(status.degraded).toBe(true);
+    expect(String(status.warning)).toMatch(/SERVER_SECRET/);
+
+    const sealed = await callApp(env, "/api/intake/challenge");
+    expect(sealed.status).toBe(503);
+    const body = (await sealed.json()) as Record<string, unknown>;
+    expect(body.error).toBe("not_provisioned");
   });
 });

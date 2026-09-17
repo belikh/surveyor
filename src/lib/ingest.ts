@@ -4,7 +4,7 @@
 // honest held status the engine (T5) drains. Hostile input fails loud.
 
 import { z } from "zod";
-import { quarantineText } from "./intake";
+import { canonicaliseText, quarantineText } from "./intake";
 
 /** 25 MB per document: above this, fail closed, never truncate silently. */
 export const MAX_DOC_BYTES = 25 * 1024 * 1024;
@@ -79,12 +79,14 @@ export interface GatedText {
 
 /**
  * Name-leak gate for corpus text: quarantine names BEFORE mirror write.
- * Returns scrubbed text plus the sealed-later names.
+ * Returns scrubbed text plus the sealed-later names. Text is canonicalised
+ * first (format characters removed) so what is scanned is what is stored.
  */
 export function gateCorpusText(raw: string): GatedText {
-  const { scrubbed, hits } = quarantineText(raw);
+  const canonical = canonicaliseText(raw);
+  const { scrubbed, hits } = quarantineText(canonical);
   if (hits.length === 0) {
-    return { text: raw, verdict: "clean", names: [] };
+    return { text: canonical, verdict: "clean", names: [] };
   }
   return {
     text: scrubbed,

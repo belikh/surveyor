@@ -213,9 +213,11 @@ describe("corpus-grounded rounds (R4)", () => {
     });
     const body = (await done.json()) as {
       done?: boolean;
-      retrigger?: { new_topics: string[] };
+      retrigger?: unknown;
     };
     expect(body.done).toBe(true);
-    expect(body.retrigger?.new_topics.length).toBeGreaterThan(0);
+    // The completion response is anonymous: it must not carry the internal
+    // retrigger detail (which topics other sources or the operator raised).
+    expect(body.retrigger).toBeUndefined();
   });
 });

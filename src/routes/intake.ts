@@ -17,10 +17,12 @@ import {
 import {
   AddendumBodySchema,
   CreateBodySchema,
+  QUESTIONS_PER_ROUND,
   ResumeBodySchema,
   RoundsBodySchema,
   StepsBodySchema,
   quarantineText,
+  type QuarantineHit,
 } from "../lib/intake";
 import { groundedQuestions, ROUNDS_MAX } from "../lib/rounds";
 import { normaliseTopic } from "../lib/engine";
@@ -37,6 +39,17 @@ import {
 type Env = { Bindings: Bindings };
 
 export const intake = new Hono<{ Bindings: Bindings }>();
+
+/** Per-answer ceiling on quarantined name claims. Scrubbing still covers the
+ *  whole answer; only the entity rows a single answer can mint are bounded. */
+const MAX_HITS_PER_ANSWER = 32;
+
+/** Per-submission ceiling on appended rows (messages + entities), reserved
+ *  atomically before the batch. Derived from the survey shape — the initial
+ *  upload (≤32 answers × ≤3 names) plus every round (≤3×3) plus attachment
+ *  testimony — with generous headroom, never from the request. */
+const WRITE_BUDGET_ROWS =
+  32 * 4 + ROUNDS_MAX * QUESTIONS_PER_ROUND + 128;
 
 /** Env is a boundary too: clamp difficulty into the sanctioned range. */
 function difficulty(env: Bindings): number {
@@ -169,13 +182,45 @@ intake.post("/:id/steps", async (c) => {
     return c.json({ error: "submission_closed" }, 409);
   }
 
+  // Prepare (scrub + cap) before the reservation so the budget is exact.
+  const prepared: Array<{
+    topic: string;
+    scrubbed: string;
+    hits: QuarantineHit[];
+  }> = parsed.data.answers.map((a) => {
+    const { scrubbed, hits } = quarantineText(a.value);
+    return {
+      topic: a.topic,
+      scrubbed,
+      hits: hits.slice(0, MAX_HITS_PER_ANSWER),
+    };
+  });
+  const newRows =
+    prepared.length + prepared.reduce((n, p) => n + p.hits.length, 0);
+  // Reserve the write budget atomically: a single guarded UPDATE means
+  // concurrent requests serialise on the submission row rather than all
+  // reading the same stale count.
+  const reservation = await c.env.DB.prepare(
+    "UPDATE submissions SET write_count = write_count + ? WHERE id = ? AND write_count + ? <= ?",
+  )
+    .bind(newRows, id, newRows, WRITE_BUDGET_ROWS)
+    .run();
+  if (reservation.meta.changes === 0) {
+    return c.json(
+      {
+        error: "write_budget_exceeded",
+        detail: "per-submission write budget reached",
+      },
+      429,
+    );
+  }
+
   const existing = await c.env.DB.prepare(
     "SELECT MAX(seq) AS maxSeq FROM messages WHERE submission_id = ?",
   ).bind(id).first<{ maxSeq: number | null }>();
   let seq = (existing?.maxSeq ?? -1) + 1;
   const batch: Array<{ sql: string; params?: unknown[] }> = [];
-  for (const a of parsed.data.answers) {
-    const { scrubbed, hits } = quarantineText(a.value);
+  for (const { topic, scrubbed, hits } of prepared) {
     const envelope = await sealText(app.kit, scrubbed);
     batch.push({
       sql: "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES (?, ?, 'submitter', 'structured', ?)",
@@ -194,7 +239,7 @@ intake.post("/:id/steps", async (c) => {
     }
     batch.push({
       sql: "INSERT INTO topics (submission_id, topic, source) VALUES (?, ?, 'baseline') ON CONFLICT(submission_id, topic) DO NOTHING",
-      params: [id, normaliseTopic(a.topic)],
+      params: [id, normaliseTopic(topic)],
     });
   }
   // FakeD1.batch takes prepared statements; real D1 too — build them here.
@@ -240,7 +285,10 @@ intake.post("/:id/attachments", async (c) => {
     0,
     128,
   );
-  if (attachmentLane(mediaType, filename) === "rejected") {
+  // Decide the lane once, here, and persist it: the drain must never have to
+  // re-derive it from the sealed filename (which can never match ".pdf").
+  const lane = attachmentLane(mediaType, filename);
+  if (lane === "rejected") {
     return c.json({ error: "rejected", detail: "unsupported type" }, 422);
   }
   const declared = Number(c.req.header("content-length") ?? "0");
@@ -260,8 +308,8 @@ intake.post("/:id/attachments", async (c) => {
   // WHERE is a single SQLite statement, so D1 applies it under the write
   // lock and the quota cannot be raced.
   const reserved = await c.env.DB.prepare(
-    "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, reason, retry_after, created_at) " +
-      "SELECT ?, ?, ?, ?, ?, 'uploaded', ?, NULL, NULL, ? " +
+    "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, lane, reason, retry_after, created_at) " +
+      "SELECT ?, ?, ?, ?, ?, 'uploaded', ?, ?, NULL, NULL, ? " +
       "WHERE (SELECT COALESCE(SUM(size_bytes), 0) FROM attachments WHERE submission_id = ?) + ? <= ?",
   )
     .bind(
@@ -271,6 +319,7 @@ intake.post("/:id/attachments", async (c) => {
       mediaType,
       bytes.length,
       key,
+      lane,
       now,
       id,
       bytes.length,
@@ -383,10 +432,12 @@ intake.post("/:id/rounds", async (c) => {
     return c.json({ error: "submission_closed" }, 409);
   }
   // Rounds are bounded; on exhaustion the submission completes and the
-  // pipeline retriggers on genuinely new ground (R4).
+  // pipeline retriggers on genuinely new ground (R4). The retrigger detail
+  // is internal: returning it to an anonymous caller would leak which
+  // topics other sources or the operator have already raised.
   if (me.round >= ROUNDS_MAX) {
-    const retrigger = await completeAndRetrigger(c.env.DB, app.kit, c.env, id);
-    return c.json({ questions: [], done: true, retrigger });
+    await completeAndRetrigger(c.env.DB, app.kit, c.env, id);
+    return c.json({ questions: [], done: true });
   }
   const family = me.parent_id ? [id, me.parent_id] : [id];
   const placeholders = family.map(() => "?").join(",");
@@ -403,8 +454,8 @@ intake.post("/:id/rounds", async (c) => {
     recordTurn(c.env.DB, t),
   );
   if (result.questions.length === 0) {
-    const retrigger = await completeAndRetrigger(c.env.DB, app.kit, c.env, id);
-    return c.json({ questions: [], done: true, retrigger });
+    await completeAndRetrigger(c.env.DB, app.kit, c.env, id);
+    return c.json({ questions: [], done: true });
   }
   await c.env.DB.prepare(
     "UPDATE submissions SET round = round + 1 WHERE id = ?",

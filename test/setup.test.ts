@@ -75,6 +75,13 @@ describe("provider entry safety", () => {
       "https://[::1]:8080/v1",
       "http://llm.example/v1",
       "https://metadata.google.internal/v1",
+      // IPv4-mapped IPv6 literals (WHATWG normalises the dotted form away)
+      "https://[::ffff:7f00:1]/v1",
+      "https://[::ffff:7f00:0001]/v1",
+      "https://[::ffff:127.0.0.1]/v1",
+      "https://[::ffff:a9fe:a9fe]/v1",
+      "https://[::ffff:0a00:0001]/v1",
+      "https://[::ffff:6440:0001]/v1",
     ]) {
       expect(() => ProviderEntrySchema.parse(entry({ base_url }))).toThrow(
         /base URL/,

@@ -1,9 +1,16 @@
 import { describe, it, expect } from "vitest";
 import app from "../src/index";
+import { boot } from "../src/state";
+import { createVaultKit, openText, sealText } from "../src/lib/vault";
 import { FakeD1 } from "./helpers/d1";
 
 function makeEnv(operatorToken = "") {
-  return { DB: new FakeD1() as never, OPERATOR_TOKEN: operatorToken };
+  return {
+    DB: new FakeD1() as never,
+    OPERATOR_TOKEN: operatorToken,
+    SERVER_SECRET: "server-secret-for-tests",
+    ENCRYPTION_KEY: "e".padEnd(64, "0"),
+  };
 }
 
 async function fetch_(
@@ -137,5 +144,61 @@ describe("surveyor worker", () => {
     // State reset to welcome: a subsequent setup read shows fresh state.
     const after = (await fetch_(env, "/api/setup").then((r) => r.json())) as Record<string, unknown>;
     expect(after.phase).toBe("welcome");
+  });
+});
+
+describe("POST /api/audit/reseal", () => {
+  it("re-seals rows written under an old key pair", async () => {
+    const env = makeEnv("op-token");
+    const { kit: newKit } = await boot(env as never);
+    const oldKit = await createVaultKit("old-server-secret", "f".repeat(64));
+    const db = env.DB as FakeD1;
+    await db
+      .prepare(
+        "INSERT INTO submissions (id, code_hmac, status, kind, parent_id, round, created_at) VALUES ('s1','h','open','original',NULL,0,?)",
+      )
+      .bind(new Date().toISOString())
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES ('s1',0,'submitter','structured',?)",
+      )
+      .bind(await sealText(oldKit, "old testimony"))
+      .run();
+
+    const res = await fetch_(env, "/api/audit/reseal", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer op-token",
+      },
+      body: JSON.stringify({
+        old_server_secret: "old-server-secret",
+        old_encryption_key: "f".repeat(64),
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      resealed: Record<string, number>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.resealed["messages.body_envelope"]).toBe(1);
+    const row = (await db
+      .prepare("SELECT body_envelope FROM messages")
+      .first()) as { body_envelope: string };
+    expect(await openText(newKit, row.body_envelope)).toBe("old testimony");
+  });
+
+  it("requires the operator token", async () => {
+    const res = await fetch_(makeEnv("op-token"), "/api/audit/reseal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        old_server_secret: "a",
+        old_encryption_key: "b".repeat(64),
+      }),
+    });
+    expect(res.status).toBe(401);
   });
 });

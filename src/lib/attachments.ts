@@ -6,7 +6,7 @@
 
 import type { Bindings } from "../env";
 import { getState } from "../state";
-import { nameHmac, sealText } from "./vault";
+import { nameHmac, openText, sealText } from "./vault";
 import { recordTurn } from "./telemetry";
 import { runDrain, type HeldDoc } from "./drain";
 import { buildLaneHandlers } from "./lanes";
@@ -48,6 +48,19 @@ interface AttachmentRow {
   status: string;
   raw_key: string | null;
   retry_after: string | null;
+  lane: string | null;
+}
+
+/** The lane decided at upload, or one re-derived for legacy rows whose
+ *  filename is still sealed. Unclassifiable rows fall back to "rejected" so
+ *  they are terminated rather than re-selected forever. */
+async function rowLane(app: Awaited<ReturnType<typeof getState>>, row: AttachmentRow): Promise<string> {
+  if (row.lane) return row.lane;
+  try {
+    return attachmentLane(row.media_type, await openText(app.kit, row.filename));
+  } catch {
+    return "rejected";
+  }
 }
 
 /**
@@ -60,7 +73,7 @@ export async function drainAttachmentById(
 ): Promise<{ status: string; reason: string | null }> {
   const app = await getState(env);
   const row = await env.DB.prepare(
-    "SELECT id, submission_id, filename, media_type, status, raw_key, retry_after FROM attachments WHERE id = ?",
+    "SELECT id, submission_id, filename, media_type, status, raw_key, retry_after, lane FROM attachments WHERE id = ?",
   )
     .bind(attachmentId)
     .first<AttachmentRow>();
@@ -94,9 +107,10 @@ export async function drainAttachmentById(
   const bytes = new Uint8Array(await obj.arrayBuffer());
   let b64 = "";
   for (const b of bytes) b64 += String.fromCharCode(b);
+  const lane = await rowLane(app, row);
   const doc: HeldDoc = {
     id: row.id,
-    lane: attachmentLane(row.media_type, row.filename),
+    lane,
     status: "held",
     bytes_b64: btoa(b64),
     raw_key: row.raw_key,
@@ -105,7 +119,24 @@ export async function drainAttachmentById(
   const handlers = await buildLaneHandlers(env);
   const { results } = await runDrain([doc], handlers);
   const r = results[0];
-  if (!r) return { status: "ignored", reason: "no lane handler" };
+  if (!r) {
+    // Terminal: no handler for this lane. Clear the raw bytes and record
+    // the state so the row is never re-selected with no reason and no
+    // bounded deletion time.
+    await env.DB.prepare(
+      "UPDATE attachments SET status = 'rejected', reason = ?, raw_key = NULL, retry_after = NULL WHERE id = ?",
+    )
+      .bind("unsupported attachment lane", row.id)
+      .run();
+    await env.CORPUS.delete(row.raw_key);
+    await recordTurn(env.DB, {
+      tier: "none",
+      toolCalls: 0,
+      label: `attachment:${lane}`,
+      outcome: "rejected",
+    });
+    return { status: "rejected", reason: "no lane handler" };
+  }
 
   if (["parsed", "OCRed", "rescued"].includes(r.outcome.status)) {
     const seqRow = await env.DB.prepare(

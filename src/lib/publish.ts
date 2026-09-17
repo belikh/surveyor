@@ -11,7 +11,9 @@ import {
   type GateConfig,
 } from "./reports";
 import { gatherEvidence } from "./evidence";
+import { injectionFlags } from "./engine";
 import { runJournalistPass } from "./pass";
+import { recordTurn } from "./telemetry";
 import type { ModelClient } from "./serve";
 
 export type ReportType =
@@ -130,14 +132,37 @@ export async function publishReportVersion(
       evidence,
       !row.config.allow_uncited,
     );
-    if (pass && type === "snapshot" && pass.lead) {
+    // The model-authored prose is untrusted output: it gets the same
+    // injection review as line findings before it can reach a version. A
+    // flagged swap falls back to the deterministic body, which is built
+    // only from gated content.
+    const modelText =
+      pass && (type === "snapshot" ? pass.lead : pass.body)?.trim();
+    if (modelText && injectionFlags(modelText).length > 0) {
+      await recordTurn(db, {
+        tier: pass.tier,
+        toolCalls: 0,
+        label: "journalist-pass:held",
+        outcome: "injection-marker",
+      });
+    } else if (pass && type === "snapshot" && pass.lead) {
       body = injectLead(deterministic.body, pass.lead);
     } else if (pass?.body) {
       body = pass.body;
     }
   }
   const withBanner = banner ? `${banner}\n\n${body}` : body;
-  const version = row.current_version + 1;
+
+  // Allocate the version atomically: two concurrent publishes computing
+  // current_version + 1 from the same read both wrote the same number.
+  const bumped = await db
+    .prepare(
+      "UPDATE reports SET current_version = current_version + 1 WHERE type = ? AND enabled = 1 RETURNING current_version",
+    )
+    .bind(type)
+    .first<{ current_version: number }>();
+  if (!bumped) throw new ReportDisabled();
+  const version = Number(bumped.current_version);
   const now = new Date().toISOString();
   await db.batch([
     db
@@ -147,9 +172,9 @@ export async function publishReportVersion(
       .bind(crypto.randomUUID(), type, version, await sealText(kit, withBanner), now),
     db
       .prepare(
-        "UPDATE reports SET status = 'published', current_version = ?, pending_topics_json = '[]', updated_at = ? WHERE type = ?",
+        "UPDATE reports SET status = 'published', pending_topics_json = '[]', updated_at = ? WHERE type = ?",
       )
-      .bind(version, now, type),
+      .bind(now, type),
   ]);
   return { version };
 }

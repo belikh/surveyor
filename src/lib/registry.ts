@@ -136,6 +136,10 @@ export async function validateCustomProvider(
   try {
     res = await fetchImpl(url, {
       headers: { authorization: `Bearer ${apiKey}` },
+      // A redirect hop is not re-checked against the destination policy:
+      // a public host can 302 to loopback or link-local and the internal
+      // status would come back as a passing check. Refuse to follow.
+      redirect: "manual",
       signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {

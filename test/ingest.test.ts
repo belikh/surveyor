@@ -77,4 +77,24 @@ describe("gateCorpusText", () => {
     expect(r.verdict).toBe("gated");
     expect(r.text).not.toMatch(/maddie/i);
   });
+
+  it("sees names split by zero-width characters", () => {
+    for (const text of [
+      "zvsentinelf roster: S\u200bandra B\u200bell was paid.",
+      "S\u200candra B\u200dell was paid.",
+      "S\u200dandra B\u200dell was paid.",
+      "S\ufeffandra B\ufeffell was paid.",
+    ]) {
+      const r = gateCorpusText(text);
+      expect(r.verdict, JSON.stringify(text)).toBe("gated");
+      expect(r.names.length, JSON.stringify(text)).toBeGreaterThan(0);
+      expect(r.text, JSON.stringify(text)).not.toContain("\u200b");
+    }
+  });
+
+  it("stores the canonical text when the document is clean", () => {
+    const r = gateCorpusText("Rosters posted\u200b on Tuesdays");
+    expect(r.verdict).toBe("clean");
+    expect(r.text).toBe("Rosters posted on Tuesdays");
+  });
 });

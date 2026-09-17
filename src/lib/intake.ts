@@ -73,22 +73,34 @@ export function nextQuestions(
   return STATIC_QUESTIONS.filter((q) => !covered.has(q.topic)).slice(0, count);
 }
 
-// A name token: title case, ALL CAPS, or hyphen/apostrophe-bearing. Only
-// shapes that carry a capital letter qualify — with case folded, every word
-// pair in ordinary prose would look like a name and the mirror would be
-// scrubbed to nonsense.
-const NAME_WORD = "[A-Z][a-z]*(?:['’\\-][A-Za-z]+)+|[A-Z][a-z]+|[A-Z]{2,}";
+// Name-word shapes by Unicode category, so full-width and non-Latin
+// look-alikes are seen too, not just ASCII title case.
+const NAME_WORD =
+  "\\p{Lu}\\p{Ll}*(?:['’\\-]\\p{L}+)+|\\p{Lu}\\p{Ll}+|\\p{Lu}{2,}";
 // Runs of name-shaped words are claimed together so "Sandra Bell" is one
 // identity, not two.
 const NAME_RUN = new RegExp(
   `\\b(?:${NAME_WORD})(?:\\s+(?:${NAME_WORD}))+\\b`,
-  "g",
+  "gu",
 );
 // Any standalone capitalised token is a name candidate. Enumerating the
 // words a name may follow only hides the ones the list happens not to have,
 // so unknown tokens fail closed: false positives cost a label, false
 // negatives cost a source.
-const NAME_TOKEN = new RegExp(`\\b(?:${NAME_WORD})\\b`, "g");
+const NAME_TOKEN = new RegExp(`\\b(?:${NAME_WORD})\\b`, "gu");
+
+// Unicode format characters: invisible by definition, so they can split a
+// name or marker token past any pattern. Removed before matching.
+const FORMAT_CHARS = /\p{Cf}/gu;
+
+/**
+ * Canonical text form for gating and storage: NFC for the reader, format
+ * characters removed so what is scanned is what is stored and what a human
+ * sees.
+ */
+export function canonicaliseText(raw: string): string {
+  return raw.normalize("NFC").replace(FORMAT_CHARS, "");
+}
 
 // Ordinary sentence vocabulary that must survive the gate: a non-name
 // allow-list, not a context gate. No static list of sentence openers is
@@ -145,8 +157,11 @@ export interface QuarantineHit {
  * false positives cost a label, false negatives cost a source.
  */
 export function quarantineText(
-  text: string,
+  raw: string,
 ): { scrubbed: string; hits: QuarantineHit[] } {
+  // Canonicalise first: a zero-width inside "S\u200bandra" must not hide the
+  // name from the patterns, and the scrubbed text is what gets stored.
+  const text = canonicaliseText(raw);
   const names = new Map<string, string>();
   const claims: Array<{ raw: string; label: string }> = [];
   const hits: QuarantineHit[] = [];
@@ -177,7 +192,7 @@ export function quarantineText(
     (a, b) => b.raw.length - a.raw.length,
   )) {
     scrubbed = scrubbed.replace(
-      new RegExp(`\\b${escapeRegExp(raw)}\\b`, "gi"),
+      new RegExp(`\\b${escapeRegExp(raw)}\\b`, "giu"),
       label,
     );
   }

@@ -120,6 +120,23 @@ describe("validateCustomProvider", () => {
     );
     expect(r.ok).toBe(false);
   });
+
+  it("refuses to follow redirects to the destination", async () => {
+    let sawRedirect: string | undefined;
+    const redirecting = (async (_url: string, init?: RequestInit) => {
+      sawRedirect = init?.redirect as string | undefined;
+      return new Response(null, {
+        status: 302,
+        headers: { location: "http://127.0.0.1:8788/api/setup" },
+      });
+    }) as typeof fetch;
+    const r = await validateCustomProvider(
+      { label: "c", baseUrl: "https://llm.example/v1", model: "m", apiKey: "k" },
+      redirecting,
+    );
+    expect(r.ok).toBe(false);
+    expect(sawRedirect).toBe("manual");
+  });
 });
 
 describe("telemetry", () => {
@@ -127,7 +144,12 @@ describe("telemetry", () => {
     const db = new FakeD1() as never;
     // Boot the telemetry table the same way state.ts does.
     const { boot } = await import("../src/state");
-    await boot({ DB: db, OPERATOR_TOKEN: "" } as never);
+    await boot({
+      DB: db,
+      OPERATOR_TOKEN: "",
+      SERVER_SECRET: "server-secret-for-tests",
+      ENCRYPTION_KEY: "e".padEnd(64, "0"),
+    } as never);
     await recordTurn(db, { tier: "groq", toolCalls: 3, label: "round-1" });
     await recordTurn(db, { tier: "static", toolCalls: 0, label: "round-2" });
     const rows = await listTelemetry(db, 10);

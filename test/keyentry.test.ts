@@ -66,7 +66,9 @@ function entryBody(over: Record<string, unknown> = {}) {
 }
 
 async function providersInState(env: Record<string, unknown>) {
-  const state = (await (await callApp(env, "/api/setup")).json()) as {
+  const state = (await (
+    await callApp(env, "/api/setup", { headers: auth })
+  ).json()) as {
     providers: Array<Record<string, string>>;
   };
   return state.providers;
@@ -182,6 +184,22 @@ describe("BYOK key entry (R2)", () => {
       body: entryBody({ secret_slot: "../escape" }),
     });
     expect(res.status).toBe(422);
+  });
+
+  it("refuses to delete non-provider slots", async () => {
+    const calls = stubCloudflare();
+    const env = makeEnv();
+    const res = await callApp(env, "/api/providers/key/ENCRYPTION_KEY", {
+      method: "DELETE",
+      headers: auth,
+      body: JSON.stringify({
+        cf_token: "cf-secret-token",
+        account_id: "acct-123",
+        script_name: "surveyor",
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(calls.deletes).toHaveLength(0);
   });
 
   it("requires the operator token", async () => {

@@ -6,13 +6,18 @@ import { sanitiseStoredSetup } from "./lib/registry";
 import { createVaultKit, type VaultKit } from "./lib/vault";
 import SCHEMA_SQL from "./db/schema.sql";
 
-const DEV_SERVER_SECRET = "surveyor-dev-secret-not-for-production";
-const DEV_KEY =
-  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-// Dev fallbacks for local/wrangler dev and offline tests only — production
-// deploy MUST set the real secrets. A production caught on dev keys fails
-// deploy verification: the dev ENCRYPTION_KEY is public, so every envelope
-// would be readable on leak (constitution I + II).
+/** The installation is missing the key material it seals testimony with.
+ *  There is deliberately no development fallback: a published constant is
+ *  not a key, and a missing binding must fail closed rather than quietly
+ *  seal every source behind a value printed in this repository. Callers
+ *  surface this as a 503 so the operator sees the state before collecting
+ *  testimony (constitution I + II). */
+export class InstallationUnprovisioned extends Error {
+  constructor() {
+    super("SERVER_SECRET / ENCRYPTION_KEY missing");
+    this.name = "InstallationUnprovisioned";
+  }
+}
 
 const FRESH: SetupState = {
   phase: "welcome",
@@ -43,10 +48,12 @@ export function getState(env: Bindings): Promise<AppState> {
 }
 
 export async function boot(env: Bindings): Promise<AppState> {
-  const kit = await createVaultKit(
-    env.SERVER_SECRET ?? DEV_SERVER_SECRET,
-    env.ENCRYPTION_KEY ?? DEV_KEY,
-  );
+  const serverSecret = env.SERVER_SECRET;
+  const encKeyHex = env.ENCRYPTION_KEY;
+  if (!serverSecret || !encKeyHex) {
+    throw new InstallationUnprovisioned();
+  }
+  const kit = await createVaultKit(serverSecret, encKeyHex);
   const statements = SCHEMA_SQL.replace(/^\s*--.*$/gm, "")
     .split(";")
     .map((s: string) => s.trim())
@@ -61,6 +68,9 @@ export async function boot(env: Bindings): Promise<AppState> {
     "ALTER TABLE corpus_docs ADD COLUMN reason TEXT",
     "ALTER TABLE telemetry ADD COLUMN outcome TEXT",
     "ALTER TABLE reports ADD COLUMN sched_total INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE angles ADD COLUMN flags_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE attachments ADD COLUMN lane TEXT",
+    "ALTER TABLE submissions ADD COLUMN write_count INTEGER NOT NULL DEFAULT 0",
   ];
   for (const stmt of additive) {
     try {

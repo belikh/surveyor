@@ -19,6 +19,7 @@ function makeEnv() {
     OPERATOR_TOKEN: TOKEN,
     SERVER_SECRET: "server-secret-for-tests",
     ENCRYPTION_KEY: "e".padEnd(64, "0"),
+    PUBLIC_BASE_URL: "https://survey.example",
     POW_SECRET: "pow-test-secret",
     POW_DIFFICULTY: "8",
   };

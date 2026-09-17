@@ -67,13 +67,16 @@ export async function putWorkerSecret(
   });
 }
 
-/** Delete a Worker secret. Missing secrets are treated as already gone. */
+/** Delete a Worker secret. `allowed` is the caller's allow-list: a slot
+ *  outside it is never deleted, whatever its shape. SECRET_SLOT only bounds
+ *  an env-binding name; it says nothing about which bindings a route owns. */
 export async function deleteWorkerSecret(
   ctx: SecretsContext,
   name: string,
+  allowed: ReadonlySet<string>,
   fetchImpl: typeof fetch = fetch,
 ): Promise<void> {
-  if (!SECRET_SLOT.test(name)) throw new Error("invalid secret slot name");
+  if (!allowed.has(name)) throw new Error("secret slot not deletable");
   await cfCall(fetchImpl, ctx, `/secrets/${encodeURIComponent(name)}`, {
     method: "DELETE",
   });

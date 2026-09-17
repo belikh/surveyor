@@ -127,7 +127,11 @@ describe("Turnstile configuration surface", () => {
       await callApp(makeEnv(), "/api/status")
     ).json()) as Record<string, unknown>;
     expect(off.turnstile_sitekey).toBeUndefined();
-    expect(Object.keys(off).sort()).toEqual(["degraded", "warning"]);
+    expect(Object.keys(off).sort()).toEqual([
+      "degraded",
+      "provisioned",
+      "warning",
+    ]);
 
     const on = (await (
       await callApp(

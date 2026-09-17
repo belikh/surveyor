@@ -30,15 +30,48 @@ function isPrivateIpv4([a, b]: number[]): boolean {
   return false;
 }
 
+/** Expand an IPv6 literal to its 16 bytes, or null when it is not one.
+ *  Handles "::" compression once; bracketed forms are stripped by callers. */
+function ipv6ToBytes(host: string): number[] | null {
+  if (!host.includes(":")) return null;
+  const parts = host.split("::");
+  if (parts.length > 2) return null;
+  const parseGroups = (part: string): number[] | null => {
+    if (part === "") return [];
+    const out: number[] = [];
+    for (const group of part.split(":")) {
+      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+      const n = parseInt(group, 16);
+      out.push((n >> 8) & 0xff, n & 0xff);
+    }
+    return out;
+  };
+  const head = parseGroups(parts[0]);
+  if (!head) return null;
+  if (parts.length === 1) return head.length === 16 ? head : null;
+  const tail = parseGroups(parts[1]);
+  if (!tail) return null;
+  const fill = 16 - head.length - tail.length;
+  if (fill < 0) return null;
+  return [...head, ...new Array<number>(fill).fill(0), ...tail];
+}
+
 function isPrivateIpv6(host: string): boolean {
-  const h = host.toLowerCase();
-  if (h === "::" || h === "::1") return true;
-  if (/^fe[89ab]/.test(h)) return true; // fe80::/10
-  if (/^f[cd]/.test(h)) return true; // fc00::/7 unique-local
-  const mapped = h.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) {
-    const v4 = parseIpv4(mapped[1]);
-    return v4 ? isPrivateIpv4(v4) : true;
+  const b = ipv6ToBytes(host.toLowerCase());
+  if (!b) return true; // unparseable: fail closed
+  const u16 = (i: number) => (b[i] << 8) | b[i + 1];
+  if (b.every((x) => x === 0)) return true; // ::
+  if (b.slice(0, 15).every((x) => x === 0) && b[15] === 1) return true; // ::1
+  if ((b[0] & 0xfe) === 0xfc) return true; // fc00::/7 unique-local
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10
+  if (b[0] === 0xff) return true; // ff00::/8 multicast
+  // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (::/96) addresses
+  // embed the IPv4 address in the last four bytes.
+  if (
+    b.slice(0, 10).every((x) => x === 0) &&
+    (u16(5) === 0xffff || u16(5) === 0)
+  ) {
+    return isPrivateIpv4(b.slice(12));
   }
   return false;
 }

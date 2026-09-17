@@ -2,7 +2,8 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { getState } from "./state";
+import { getState, InstallationUnprovisioned } from "./state";
+import { createVaultKit, openText, sealText } from "./lib/vault";
 import {
   SetupStepSchema,
   validateSetupStep,
@@ -39,7 +40,7 @@ import {
 import { createCloudflareApi } from "./lib/cfapi";
 import { liveClient, hasSecretValue } from "./lib/providers";
 import { isAllowedProviderBaseUrl } from "./lib/net";
-import { isProviderSlot } from "./lib/setup";
+import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
 import corpus from "./routes/corpus";
@@ -82,11 +83,22 @@ app.use("*", async (c, next) => {
 });
 
 app.notFound((c) => c.json({ error: "not_found" }, 404));
-app.onError((_err, c) =>
+app.onError((err, c) => {
+  // Missing key material is a deployment state, not a bad request: say so
+  // plainly and fail closed wherever sealed data would be read or written.
+  if (err instanceof InstallationUnprovisioned) {
+    return c.json(
+      {
+        error: "not_provisioned",
+        detail: "SERVER_SECRET / ENCRYPTION_KEY missing",
+      },
+      503,
+    );
+  }
   // Never echo internal error detail to the client; route handlers map
   // known failures to their own statuses, everything else is a 400.
-  c.json({ error: "bad_request" }, 400),
-);
+  return c.json({ error: "bad_request" }, 400);
+});
 
 // Operator auth: constant-time token compare, disabled-until-set — an
 // unset OPERATOR_TOKEN 404s the write surface entirely (bootstrap is
@@ -221,7 +233,18 @@ app.get("/s/:slug", async (c) => {
 });
 
 app.get("/api/setup", async (c) => {
+  const denied = await requireOperator(c);
   const s = await (await getState(c.env)).loadSetup();
+  if (denied) {
+    // Public view: the wizard's phase and the instrument copy that /survey
+    // already serves. Provider entries (labels, models, base URLs) are
+    // operator data and never leave without the token.
+    return c.json({
+      phase: s.phase,
+      instrument: s.instrument,
+      installed_at: s.installed_at,
+    });
+  }
   return c.json(s);
 });
 
@@ -255,13 +278,33 @@ app.get("/api/providers", async (c) => {
 // enabled the public sitekey rides along so the survey shell can render
 // the widget (a sitekey is public; its secret never leaves the store).
 app.get("/api/status", async (c) => {
-  const s = await (await getState(c.env)).loadSetup();
+  let s;
+  try {
+    s = await (await getState(c.env)).loadSetup();
+  } catch (err) {
+    if (err instanceof InstallationUnprovisioned) {
+      return c.json({
+        degraded: true,
+        warning:
+          "Not provisioned — SERVER_SECRET / ENCRYPTION_KEY missing. " +
+          "This installation cannot seal testimony until they are set.",
+        provisioned: false,
+      });
+    }
+    throw err;
+  }
   const { degraded, warning } = resolveChain(s, (slot) =>
     hasSecret(c.env, slot),
   );
-  const body: { degraded: boolean; warning: string | null; turnstile_sitekey?: string } = {
+  const body: {
+    degraded: boolean;
+    warning: string | null;
+    provisioned: boolean;
+    turnstile_sitekey?: string;
+  } = {
     degraded,
     warning,
+    provisioned: true,
   };
   if (c.env.TURNSTILE_SECRET && c.env.TURNSTILE_SITEKEY) {
     body.turnstile_sitekey = c.env.TURNSTILE_SITEKEY;
@@ -376,7 +419,13 @@ app.delete("/api/providers/key/:slot", async (c) => {
   const denied = await requireOperator(c);
   if (denied) return c.json(deny(denied), denied);
   const slot = c.req.param("slot");
-  if (!SECRET_SLOT.test(slot)) return c.json({ error: "not_found" }, 404);
+  // Only provider key slots are removable here: a shape check would also
+  // admit OPERATOR_TOKEN, SERVER_SECRET and ENCRYPTION_KEY, which are not
+  // this route's to delete. A refused slot stays indistinguishable from an
+  // unknown one.
+  if (!SECRET_SLOT.test(slot) || !isProviderSlot(slot)) {
+    return c.json({ error: "not_found" }, 404);
+  }
   const parsed = KeyRemoveSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
   try {
@@ -387,6 +436,7 @@ app.delete("/api/providers/key/:slot", async (c) => {
         token: parsed.data.cf_token,
       },
       slot,
+      PROVIDER_SLOTS,
     );
   } catch (err) {
     return c.json(
@@ -469,6 +519,81 @@ app.get("/api/intake/entities/groups", async (c) => {
   // Unbound .all() returns rows directly on both D1 shims used here.
   const groups = Array.isArray(rows) ? rows : rows.results;
   return c.json({ groups });
+});
+
+// One-shot re-seal after key rotation: rows sealed under an older key pair
+// (for example a deployment that ran on the retired development constants)
+// are opened with the supplied old kit and written back with the current
+// installation kit. Operator-gated, idempotent, and skips rows already
+// readable with the current kit.
+const ResealBodySchema = z.object({
+  old_server_secret: z.string().min(1).max(4096),
+  old_encryption_key: z.string().min(1).max(4096),
+});
+
+const RESEAL_COLUMNS: Array<{
+  table: string;
+  column: string;
+  key: string;
+}> = [
+  { table: "messages", column: "body_envelope", key: "rowid" },
+  { table: "entities", column: "name_envelope", key: "rowid" },
+  { table: "attachments", column: "filename", key: "id" },
+  { table: "corpus_docs", column: "text_envelope", key: "id" },
+  { table: "corpus_docs", column: "filename", key: "id" },
+  { table: "angles", column: "rationale_envelope", key: "id" },
+  { table: "research_lines", column: "findings_envelope", key: "id" },
+  { table: "report_versions", column: "body_envelope", key: "id" },
+  { table: "report_entries", column: "entry_envelope", key: "id" },
+];
+
+app.post("/api/audit/reseal", async (c) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  const parsed = ResealBodySchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const st = await getState(c.env);
+  const oldKit = await createVaultKit(
+    parsed.data.old_server_secret,
+    parsed.data.old_encryption_key,
+  );
+  const resealed: Record<string, number> = {};
+  let skipped = 0;
+  let failed = 0;
+  for (const { table, column, key } of RESEAL_COLUMNS) {
+    const rows = await c.env.DB.prepare(
+      `SELECT ${key} AS k, ${column} AS v FROM ${table}`,
+    ).all<{ k: string | number; v: string | null }>();
+    const list = Array.isArray(rows) ? rows : rows.results;
+    const statements = [];
+    let n = 0;
+    for (const row of list) {
+      const envelope = String(row.v ?? "");
+      if (!envelope.startsWith("v1.")) continue;
+      try {
+        await openText(st.kit, envelope);
+        skipped++;
+        continue;
+      } catch {
+        // Not readable with the current kit: try the previous one.
+      }
+      try {
+        const text = await openText(oldKit, envelope);
+        statements.push(
+          c.env.DB.prepare(
+            `UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`,
+          ).bind(await sealText(st.kit, text), row.k),
+        );
+        n++;
+      } catch {
+        failed++;
+      }
+    }
+    if (statements.length > 0) await c.env.DB.batch(statements);
+    resealed[`${table}.${column}`] = n;
+  }
+  await st.audit("audit:reseal");
+  return c.json({ ok: failed === 0, resealed, skipped, failed });
 });
 
 // At-rest storage audit (operator-only): envelope shapes only, never

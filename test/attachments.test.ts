@@ -233,3 +233,77 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     expect(await attachmentBytes(env.DB as never, id)).toBe(ATTACH_TOTAL_BYTES);
   });
 });
+
+describe("attachment lane durability", () => {
+  it("drains an attachment whose type came from the filename extension", async () => {
+    const env = makeEnv({
+      AI: {
+        toMarkdown: async () => ({
+          format: "markdown",
+          data: "Extracted PDF body",
+        }),
+      },
+    });
+    const { id, code } = await createSubmission(env);
+    const up = await upload(
+      env,
+      id,
+      code,
+      "%PDF-1.4 probe",
+      "x.pdf",
+      "application/octet-stream",
+    );
+    expect(up.status).toBe(201);
+    const attId = ((await up.json()) as { id: string }).id;
+
+    const drained = (await (
+      await callApp(env, `/api/intake/${id}/attachments/drain`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({}),
+      })
+    ).json()) as { drained: number; outcomes: Array<{ status: string }> };
+    expect(drained.drained).toBe(1);
+    expect(drained.outcomes[0].status).toBe("parsed");
+
+    const row = (await (env.DB as FakeD1)
+      .prepare("SELECT status, raw_key FROM attachments WHERE id = ?")
+      .bind(attId)
+      .first()) as { status: string; raw_key: string | null };
+    expect(row.status).toBe("parsed");
+    expect(row.raw_key).toBeNull();
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
+  it("terminates a row with no lane handler instead of stranding raw bytes", async () => {
+    const env = makeEnv();
+    const { id } = await createSubmission(env);
+    const { kit } = await boot(env as never);
+    const attId = "mystery";
+    const key = `attachments/${id}/${attId}`;
+    await (env.DB as FakeD1)
+      .prepare(
+        "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, lane, reason, retry_after, created_at) VALUES (?, ?, ?, 'application/octet-stream', 4, 'uploaded', ?, 'held-weird', NULL, NULL, ?)",
+      )
+      .bind(
+        attId,
+        id,
+        await sealText(kit, "mystery.bin"),
+        key,
+        new Date().toISOString(),
+      )
+      .run();
+    await (env.CORPUS as FakeR2).put(key, new Uint8Array([1, 2, 3, 4]));
+
+    const out = await drainAttachmentById(env as never, attId);
+    expect(out.status).toBe("rejected");
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+    const row = (await (env.DB as FakeD1)
+      .prepare("SELECT status, raw_key, reason FROM attachments WHERE id = ?")
+      .bind(attId)
+      .first()) as { status: string; raw_key: string | null; reason: string | null };
+    expect(row.status).toBe("rejected");
+    expect(row.raw_key).toBeNull();
+    expect(row.reason).toBeTruthy();
+  });
+});

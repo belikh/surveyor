@@ -74,19 +74,33 @@ describe("automatic retrigger (R4)", () => {
     expect(await angleCount(db)).toBeGreaterThan(0);
   });
 
-  it("does not retrigger on corroboration-only material", async () => {
+  it("does not let another submission's raw topic veto research", async () => {
     const env = makeEnv();
     const { kit } = await boot(env as never);
     const db = env.DB as FakeD1;
-    // Another submission already settled "pay".
+    // Another submission named "pay", but no angle was ever researched.
     await seedSubmission(db, "s2", ["pay"]);
     await seedSubmission(db, "s1", ["pay"]);
-    await seedDoc(db, kit, "d1", "Penalty rates and pay bands.");
+    await seedDoc(db, kit, "d1", "Penalty rates and pay bands are contentious.");
+
+    const r = await retriggerOnCompletion(db as never, kit, env as never, "s1");
+    expect(r.new_topics).toEqual(["pay"]);
+    expect(r.angles_queued).toBeGreaterThan(0);
+  });
+
+  it("does not retrigger ground already researched by an angle", async () => {
+    const env = makeEnv();
+    const { kit } = await boot(env as never);
+    const db = env.DB as FakeD1;
+    await seedSubmission(db, "s2", ["pay"]);
+    await seedSubmission(db, "s1", ["pay"]);
+    await seedDoc(db, kit, "d1", "Penalty rates and pay bands are contentious.");
+    // s2's completion stores the "pay" angle: the ground is now researched.
+    await retriggerOnCompletion(db as never, kit, env as never, "s2");
 
     const r = await retriggerOnCompletion(db as never, kit, env as never, "s1");
     expect(r.new_topics).toEqual([]);
     expect(r.angles_queued).toBe(0);
-    expect(await angleCount(db)).toBe(0);
   });
 
   it("never rebills settled ground on a repeat", async () => {

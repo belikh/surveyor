@@ -29,15 +29,16 @@ async function currentSlug(db: D1Database): Promise<string> {
   return slug;
 }
 
-function originOf(c: { req: { url: string }; env: Bindings }): string {
-  // Configured public base wins; the request origin is only a fallback
-  // (Host headers are caller-controlled, never installation identity).
+/** The configured public origin, or null when unset. The request origin is
+ *  never used: it is derived from the caller-supplied Host header, which
+ *  could steer every shared link and QR code at an attacker's host. */
+function originOf(c: { env: Bindings }): string | null {
   const configured = (c.env as unknown as Record<string, unknown>)
     .PUBLIC_BASE_URL;
   if (typeof configured === "string" && configured.length > 0) {
     return configured.replace(/\/+$/, "");
   }
-  return new URL(c.req.url).origin;
+  return null;
 }
 
 /** Portrait story asset: square QR centred on a 9:16 canvas with caption.
@@ -90,7 +91,20 @@ async function issuePack(
   slug: string,
   forbidden: string[],
 ): Promise<Response> {
-  const pack = await buildPack(originOf(c), slug);
+  const origin = originOf(c);
+  if (!origin) {
+    // Fail closed: without a configured origin there is no trustworthy base
+    // for a public link, and the Host header is caller-controlled.
+    return Response.json(
+      {
+        error: "public_base_url_required",
+        detail:
+          "Set PUBLIC_BASE_URL so shared links cannot be steered by the request Host header.",
+      },
+      { status: 422 },
+    );
+  }
+  const pack = await buildPack(origin, slug);
   const audit = auditPack(pack, forbidden);
   if (!audit.ok) {
     // Structural self-check: our own builder must always pass.

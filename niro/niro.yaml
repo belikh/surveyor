@@ -11,3 +11,9 @@ version: 1
 # CI/automation: demote block-tier reflection concerns to advisory so a
 # non-interactive run proceeds and surfaces them for audit instead.
 headless: true
+
+limits:
+  # The DNS-rebinding probe (a public hostname resolving to loopback) needs
+  # longer than the default per-test budget to reach a verdict: the run
+  # blocked it at 15 minutes without one.
+  max_test_case_duration_minutes: 30

@@ -99,13 +99,26 @@ export function rankAngles(angles: CandidateAngle[]): CandidateAngle[] {
   return unique.sort((x, y) => y.exhibits.length - x.exhibits.length);
 }
 
+// Invisible formatting characters: soft hyphen, zero-widths, word joiner,
+// variation selectors and tag characters. They must not survive into the
+// matching text — inside a token they split it past every pattern.
+const INVISIBLE =
+  /[\u00ad\u180e\u200b-\u200f\u2028-\u202f\u2060-\u2064\ufeff\ufe00-\ufe0f\u{e0000}-\u{e007f}]/gu;
+
 /**
- * Canonical topic form for the settled-ground ledger: trim, collapse
- * whitespace, lower-case. Both the candidates and every ledger member are
- * normalised so case/whitespace variants cannot re-open settled ground.
+ * Canonical topic form for the settled-ground ledger: compatibility
+ * normalise (full-width look-alikes), drop invisible formatting characters,
+ * trim, collapse whitespace, lower-case. Both the candidates and every
+ * ledger member are normalised so cosmetic variants cannot re-open settled
+ * ground.
  */
 export function normaliseTopic(t: string): string {
-  return t.trim().replace(/\s+/g, " ").toLowerCase();
+  return t
+    .normalize("NFKC")
+    .replace(INVISIBLE, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 /**
@@ -135,14 +148,30 @@ const INJECTION_PATTERNS: RegExp[] = [
 ];
 
 /** Lower-case and collapse separators so spacing/punctuation variants match
- *  the same pattern. Brackets survive for the `[system]` form. */
+ *  the same pattern. Invisible formatting characters are deleted, not
+ *  rewritten to a space: they carry no word-separating meaning, and mapping
+ *  them to a space would split a marker token (instruc\u200btions →
+ *  "instruc tions") past every pattern. Brackets survive for `[system]`. */
 function normaliseForMatching(s: string): string {
   return s
     .toLowerCase()
-    .replace(/[\u200b-\u200f\u2028-\u202f\ufeff]/g, " ")
+    .replace(INVISIBLE, "")
     .replace(/[^a-z0-9[\]]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/** Injection markers found in a single piece of text, normalised so
+ *  re-spacing, hyphenation, newlines, invisible characters and punctuation
+ *  cannot slip a marker past the gate. */
+export function injectionFlags(text: string): string[] {
+  const flags: string[] = [];
+  const normalised = normaliseForMatching(text);
+  for (const pattern of INJECTION_PATTERNS) {
+    const match = normalised.match(pattern);
+    if (match) flags.push(`injection-marker:${match[0]}`);
+  }
+  return flags;
 }
 
 /**
@@ -157,13 +186,7 @@ export function flagSuspicious(
 ): string[] {
   const flags: string[] = [];
   for (const text of [claim, ...exhibits.map((e) => e.snippet)]) {
-    const normalised = normaliseForMatching(text);
-    for (const pattern of INJECTION_PATTERNS) {
-      const match = normalised.match(pattern);
-      if (match) {
-        flags.push(`injection-marker:${match[0]}`);
-      }
-    }
+    flags.push(...injectionFlags(text));
   }
   if (exhibits.length === 0) {
     flags.push("ungrounded");

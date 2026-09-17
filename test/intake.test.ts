@@ -358,3 +358,74 @@ describe("submission writes require the access code", () => {
     expect(rounds.status).toBe(409);
   });
 });
+
+describe("write budget (amplified steps)", () => {
+  function names(i0: number, n: number): string {
+    const out: string[] = [];
+    let x = i0;
+    for (let i = 0; i < n; i++, x++) {
+      let s = "";
+      let v = x;
+      for (let k = 0; k < 3; k++) {
+        s = String.fromCharCode(97 + (v % 26)) + s;
+        v = Math.floor(v / 26);
+      }
+      out.push("Z" + s);
+    }
+    return out.join(", ");
+  }
+
+  async function mint(env: Record<string, unknown>) {
+    const pow = await solvedPow(env);
+    return (await (
+      await callApp(env, "/api/intake", {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ pow }),
+      })
+    ).json()) as { id: string; access_code: string };
+  }
+
+  it("caps name claims per answer and reserves the submission budget", async () => {
+    const env = makeEnv();
+    const { id, access_code } = await mint(env);
+    const res = await callApp(env, `/api/intake/${id}/steps`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        access_code,
+        answers: Array.from({ length: 4 }, (_, i) => ({
+          q: `q${i}`,
+          topic: `t${i}`,
+          value: names(i * 180, 180),
+        })),
+      }),
+    });
+    expect(res.status).toBe(200);
+    const entities = (await (env.DB as FakeD1)
+      .prepare("SELECT COUNT(*) AS n FROM entities WHERE submission_id = ?")
+      .bind(id)
+      .first()) as { n: number };
+    expect(entities.n).toBe(4 * 32);
+  });
+
+  it("refuses a request that would exceed the per-submission budget", async () => {
+    const env = makeEnv();
+    const { id, access_code } = await mint(env);
+    const res = await callApp(env, `/api/intake/${id}/steps`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        access_code,
+        answers: Array.from({ length: 32 }, (_, i) => ({
+          q: `q${i}`,
+          topic: `t${i}`,
+          value: names(i * 180, 180),
+        })),
+      }),
+    });
+    expect(res.status).toBe(429);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("write_budget_exceeded");
+  });
+});

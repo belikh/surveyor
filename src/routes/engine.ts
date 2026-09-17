@@ -57,10 +57,13 @@ engine.post("/angles/propose", async (c) => {
   const app = await getState(c.env);
   const parsed = ProposeSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
-  // Ledger first: submission topics plus topics already angled. The
-  // serving-time LLM judge may only narrow this set, never widen it.
+  // Ledger first: the topic sets the investigation has actually researched.
+  // The serving-time LLM judge may only narrow this set, never widen it.
   const settled = await ledgerTopics(c.env.DB);
   const fresh = judgeSignificance(parsed.data.topics, settled);
+  const droppedTopics = parsed.data.topics
+    .filter((t) => !fresh.includes(t))
+    .map((t) => ({ topic: t, reason: "settled" }));
   let client: Awaited<ReturnType<typeof liveClient>> = null;
   if (parsed.data.mode === "live") {
     client = await liveClient(c.env.DB, c.env);
@@ -76,21 +79,29 @@ engine.post("/angles/propose", async (c) => {
     client,
     recordTurn: (t) => recordTurn(c.env.DB, t),
   });
-  return c.json(result);
+  return c.json({ ...result, dropped_topics: droppedTopics });
 });
 
 engine.get("/angles", async (c) => {
   const rows = await c.env.DB.prepare(
-    "SELECT id, title, exhibits_json, rank, status, created_at FROM angles ORDER BY rank ASC",
-  ).all<{ id: string; title: string; exhibits_json: string; rank: number; status: string; created_at: string }>();
+    "SELECT id, title, exhibits_json, flags_json, rank, status, created_at FROM angles ORDER BY rank ASC",
+  ).all<{ id: string; title: string; exhibits_json: string; flags_json: string | null; rank: number; status: string; created_at: string }>();
   const list = unwrap(rows);
   return c.json({
-    angles: list.map((a) => ({
-      ...a,
-      exhibits: z.array(ExhibitSchema).parse(JSON.parse(a.exhibits_json)),
-      exhibits_json: undefined,
-      provenance: "untrusted",
-    })),
+    angles: list.map((a) => {
+      const flags = z.array(z.string()).parse(JSON.parse(a.flags_json ?? "[]"));
+      return {
+        ...a,
+        exhibits: z.array(ExhibitSchema).parse(JSON.parse(a.exhibits_json)),
+        exhibits_json: undefined,
+        flags_json: undefined,
+        // A flagged heading reads as held: it is reviewable and cannot be
+        // approved until the flags are explicitly cleared.
+        status: flags.length > 0 ? "held" : a.status,
+        flags,
+        provenance: "untrusted",
+      };
+    }),
   });
 });
 
@@ -98,16 +109,51 @@ engine.post("/angles/:id/approve", async (c) => {
   const id = UuidParam.safeParse(c.req.param("id"));
   if (!id.success) return c.json({ error: "not_found" }, 404);
   const row = await c.env.DB.prepare(
-    "SELECT id, status FROM angles WHERE id = ?",
-  ).bind(id.data).first<{ id: string; status: string }>();
+    "SELECT id, status, flags_json FROM angles WHERE id = ?",
+  ).bind(id.data).first<{ id: string; status: string; flags_json: string | null }>();
   if (!row) return c.json({ error: "not_found" }, 404);
   if (row.status !== "queued") {
     return c.json({ error: "bad_state", detail: row.status }, 409);
+  }
+  const flags = z.array(z.string()).parse(JSON.parse(row.flags_json ?? "[]"));
+  if (flags.length > 0) {
+    return c.json({ error: "needs_review", flags }, 409);
   }
   await c.env.DB.prepare(
     "UPDATE angles SET status = 'approved' WHERE id = ?",
   ).bind(id.data).run();
   return c.json({ id: id.data, status: "approved" });
+});
+
+const AngleReviewSchema = z.object({
+  decision: z.enum(["approve", "reject"]),
+});
+
+// Held-angle review: approving clears the flags so the angle can be
+// approved through the normal gate; rejecting removes it from the queue.
+engine.post("/angles/:id/review", async (c) => {
+  const id = UuidParam.safeParse(c.req.param("id"));
+  if (!id.success) return c.json({ error: "not_found" }, 404);
+  const parsed = AngleReviewSchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const row = await c.env.DB.prepare(
+    "SELECT id, status, flags_json FROM angles WHERE id = ?",
+  ).bind(id.data).first<{ id: string; status: string; flags_json: string | null }>();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const flags = z.array(z.string()).parse(JSON.parse(row.flags_json ?? "[]"));
+  if (row.status !== "queued" || flags.length === 0) {
+    return c.json({ error: "bad_state", detail: row.status }, 409);
+  }
+  if (parsed.data.decision === "reject") {
+    await c.env.DB.prepare("UPDATE angles SET status = 'rejected' WHERE id = ?")
+      .bind(id.data)
+      .run();
+    return c.json({ id: id.data, status: "rejected", flags: [] });
+  }
+  await c.env.DB.prepare("UPDATE angles SET flags_json = '[]' WHERE id = ?")
+    .bind(id.data)
+    .run();
+  return c.json({ id: id.data, status: "queued", flags: [] });
 });
 
 engine.post("/lines", async (c) => {
@@ -197,17 +243,15 @@ engine.post("/lines/:id/complete", async (c) => {
 });
 
 async function ledgerTopics(db: D1Database): Promise<Set<string>> {
-  // Settled ground: submission topics plus the topic sets each angle was
-  // proposed for, canonicalised so case/whitespace variants stay settled.
-  const sub = await db.prepare("SELECT topic FROM topics").all<{
-    topic: string;
-  }>();
+  // Settled ground is the investigation's own researched ground: the
+  // canonical topic sets of stored angles. Raw submitter topics are
+  // deliberately NOT unioned here — anyone can mint a PoW submission, so
+  // treating client-supplied strings as settlement would let an anonymous
+  // visitor veto operator research.
   const ang = await db.prepare("SELECT topics_json FROM angles").all<{
     topics_json: string;
   }>();
-  const settled = new Set<string>(
-    unwrap(sub).map((r) => normaliseTopic(r.topic)),
-  );
+  const settled = new Set<string>();
   for (const a of unwrap(ang)) {
     try {
       const ts = JSON.parse(a.topics_json) as unknown;
@@ -232,26 +276,34 @@ engine.post("/lines/:id/spend", async (c) => {
   if (!id.success) return c.json({ error: "not_found" }, 404);
   const parsed = SpendSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
-  const line = await c.env.DB.prepare(
-    "SELECT id, status, spend_cap, spend_used FROM research_lines WHERE id = ?",
-  ).bind(id.data).first<{
-    id: string;
-    status: string;
-    spend_cap: number;
-    spend_used: number;
-  }>();
-  if (!line) return c.json({ error: "not_found" }, 404);
-  if (line.status !== "running") {
-    return c.json({ error: "bad_state", detail: line.status }, 409);
-  }
-  const used = line.spend_used + parsed.data.amount;
-  if (used > line.spend_cap) {
+  const amount = parsed.data.amount;
+  // Atomic conditional increment: a read-then-write lets concurrent requests
+  // all pass the cap check and last-writer-wins under-records the total.
+  const res = await c.env.DB.prepare(
+    "UPDATE research_lines SET spend_used = spend_used + ? WHERE id = ? AND status = 'running' AND spend_used + ? <= spend_cap",
+  )
+    .bind(amount, id.data, amount)
+    .run();
+  if (res.meta.changes === 0) {
+    // Not applied: read once to name the reason.
+    const line = await c.env.DB.prepare(
+      "SELECT id, status, spend_cap, spend_used FROM research_lines WHERE id = ?",
+    ).bind(id.data).first<{
+      id: string;
+      status: string;
+      spend_cap: number;
+      spend_used: number;
+    }>();
+    if (!line) return c.json({ error: "not_found" }, 404);
+    if (line.status !== "running") {
+      return c.json({ error: "bad_state", detail: line.status }, 409);
+    }
     return c.json({ error: "over_cap" }, 409);
   }
-  await c.env.DB.prepare(
-    "UPDATE research_lines SET spend_used = ? WHERE id = ?",
-  ).bind(used, id.data).run();
-  return c.json({ id: id.data, spend_used: used });
+  const updated = await c.env.DB.prepare(
+    "SELECT spend_used FROM research_lines WHERE id = ?",
+  ).bind(id.data).first<{ spend_used: number }>();
+  return c.json({ id: id.data, spend_used: updated?.spend_used ?? amount });
 });
 
 const ReviewSchema = z.object({

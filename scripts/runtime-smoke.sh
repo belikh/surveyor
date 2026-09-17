@@ -6,6 +6,10 @@ set -euo pipefail
 
 PORT="${PORT:-8788}"
 TOKEN="test-op-token"
+# Provisioned bindings for the test runtime: boot() has no development
+# fallback, so the smoke supplies its own throwaway key material.
+SERVER_SECRET="smoke-server-secret"
+ENCRYPTION_KEY="$(printf 'ab%.0s' $(seq 1 32))"
 LOG="$(mktemp)"
 cd "$(dirname "$0")/.."
 
@@ -19,7 +23,9 @@ npm run build >/dev/null
 SETSID=()
 if command -v setsid >/dev/null 2>&1; then SETSID=(setsid); fi
 ${SETSID[@]+"${SETSID[@]}"} npx wrangler dev --local --port "$PORT" --ip 127.0.0.1 \
-  --var "OPERATOR_TOKEN:$TOKEN" >"$LOG" 2>&1 &
+  --var "OPERATOR_TOKEN:$TOKEN" \
+  --var "SERVER_SECRET:$SERVER_SECRET" \
+  --var "ENCRYPTION_KEY:$ENCRYPTION_KEY" >"$LOG" 2>&1 &
 WRANGLER_PGID=$!
 cleanup() {
   kill -TERM -- "-$WRANGLER_PGID" 2>/dev/null || true

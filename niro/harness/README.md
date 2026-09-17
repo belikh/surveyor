@@ -7,7 +7,7 @@ repository root and keep their runtime state under `harness/run/`.
 
 | Operation | Entry point | Behaviour |
 | --- | --- | --- |
-| start | `start.sh` | `npm ci` when `node_modules` is missing, `npm run build`, then `wrangler dev --local` on `0.0.0.0:8788` with `OPERATOR_TOKEN=test-op-token`; waits for HTTP 200 on `/`; writes `run/wrangler.pid` and `run/wrangler.log` |
+| start | `start.sh` | `npm ci` when `node_modules` is missing, `npm run build`, then `wrangler dev --local` on `0.0.0.0:8788` with `OPERATOR_TOKEN=test-op-token` and per-run generated `SERVER_SECRET`/`ENCRYPTION_KEY` (kept in `run/secrets.env`); waits for HTTP 200 on `/`; writes `run/wrangler.pid` and `run/wrangler.log` |
 | stop | `stop.sh` | Stops the recorded process group and removes the PID file |
 | seed | `seed.sh` | Creates two original submissions through the public intake API (challenge → proof-of-work → create → steps) and writes `../credentials.yaml` and `../fixtures.yaml` |
 | reset | `reset.sh` | `stop.sh`, removes `.wrangler/` local state, `start.sh`, `seed.sh` |

@@ -23,13 +23,13 @@ export interface RetriggerResult {
 }
 
 /**
- * Investigation ledger: topics already researched (angle proposal sets) plus
- * topics settled by *other* submissions. The completing submission's own
- * topics are excluded so its genuinely new ground surfaces.
+ * Investigation ledger: the canonical topic sets of stored angles, i.e.
+ * ground this investigation has actually researched. Raw submitter topics
+ * are deliberately excluded — submissions are free to mint, so they cannot
+ * be allowed to settle (and so suppress) research by themselves.
  */
 export async function investigationLedger(
   db: D1Database,
-  excludeSubmissionId: string,
 ): Promise<Set<string>> {
   const settled = new Set<string>();
   const ang = await db
@@ -47,11 +47,6 @@ export async function investigationLedger(
       // Corrupt row: fail open on that row only, never on the ledger.
     }
   }
-  const others = await db
-    .prepare("SELECT topic FROM topics WHERE submission_id != ?")
-    .bind(excludeSubmissionId)
-    .all<{ topic: string }>();
-  for (const r of unwrap(others)) settled.add(normaliseTopic(r.topic));
   return settled;
 }
 
@@ -110,7 +105,7 @@ export async function retriggerOnCompletion(
   if (candidates.length === 0) {
     return { new_topics: [], tier: "ledger-floor", angles_queued: 0 };
   }
-  const ledger = await investigationLedger(db, submissionId);
+  const ledger = await investigationLedger(db);
   const floor = judgeSignificance(candidates, ledger).slice(0, RETRIGGER_CAP);
   let fresh = floor;
   let tier = "ledger-floor";
