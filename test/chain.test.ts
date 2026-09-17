@@ -79,6 +79,67 @@ describe("AI SDK provider chain", () => {
   });
 });
 
+describe("destination policy (A12, #13)", () => {
+  it("refuses to follow a redirect with the provider key attached", async () => {
+    let sawRedirect: string | undefined;
+    let calls = 0;
+    const redirecting = (async (_url: string, init?: RequestInit) => {
+      calls++;
+      sawRedirect = init?.redirect as string | undefined;
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://evil.example/v1/chat/completions" },
+      });
+    }) as typeof fetch;
+    const client = buildChainClient(entries.slice(0, 1), read, redirecting);
+    await expect(client.complete("hi")).rejects.toThrow(/302|chain exhausted/);
+    expect(sawRedirect).toBe("manual");
+    expect(calls).toBe(1);
+  });
+
+  it("refuses private and loopback hosts before any request", async () => {
+    const hosts = [
+      "http://127.0.0.1:8788/v1",
+      "http://localhost:8788/v1",
+      "https://10.1.2.3/v1",
+      "https://192.168.0.10/v1",
+    ];
+    let calls = 0;
+    for (const base_url of hosts) {
+      const local: ChainEntry = {
+        kind: "openai-compatible",
+        label: "local",
+        secret_slot: "GROQ_API_KEY",
+        model: "m",
+        base_url,
+      };
+      const client = buildChainClient([local], read, async () => {
+        calls++;
+        return completion("should never be reached");
+      });
+      await expect(client.complete("hi")).rejects.toThrow(/chain exhausted/);
+    }
+    expect(calls).toBe(0);
+  });
+
+  it("skips a disallowed host and serves the next public entry", async () => {
+    const local: ChainEntry = {
+      kind: "openai-compatible",
+      label: "local",
+      secret_slot: "GROQ_API_KEY",
+      model: "m",
+      base_url: "https://127.0.0.1/v1",
+    };
+    const calls: string[] = [];
+    const client = buildChainClient([local, entries[1]], read, async (url) => {
+      calls.push(String(url));
+      return completion("public!");
+    });
+    expect(await client.complete("hi")).toBe("public!");
+    expect(calls.every((u) => u.includes("b.example"))).toBe(true);
+  });
+});
+
 describe("vision capability routing", () => {
   it("only sends images to vision-tagged entries", async () => {
     const plain = buildChainClient(entries, read, async () => completion("img"));
