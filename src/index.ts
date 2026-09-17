@@ -47,6 +47,7 @@ import corpus from "./routes/corpus";
 import launch from "./routes/launch";
 import engine from "./routes/engine";
 import reports from "./routes/reports";
+import breach from "./routes/breach";
 import { evaluateAll } from "./lib/schedule";
 import { REQUIRED_SCOPES, REVOCATION_GUIDANCE } from "./lib/scopes";
 import type { Bindings, IngestMessage } from "./env";
@@ -203,6 +204,15 @@ app.post("/api/scheduler/evaluate", async (c) => {
   );
   return c.json({ receipts });
 });
+
+// Breach assessments and OAIC statement drafts are operator-only: they
+// name affected people and describe the incident.
+app.use("/api/breach/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/breach", breach);
 
 // Launch pack: generation and rotation are operator-only; the slug
 // landing page is public (it is the survey's front door).

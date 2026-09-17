@@ -160,3 +160,15 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_attachments_submission ON attachments(submission_id);
+
+-- Breach assessments (Privacy Act Part IIIC). The facts and decision are
+-- sealed in record_envelope; aware_at and decision stay plaintext so the
+-- thirty-day assessment clock (s 26WH) is queryable without opening it.
+CREATE TABLE IF NOT EXISTS breach_assessments (
+  id TEXT PRIMARY KEY,
+  aware_at TEXT NOT NULL,
+  decision TEXT NOT NULL DEFAULT 'pending',
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
