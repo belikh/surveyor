@@ -64,6 +64,7 @@ import corpus from "./routes/corpus";
 import launch from "./routes/launch";
 import engine from "./routes/engine";
 import reports from "./routes/reports";
+import dossier from "./routes/dossier";
 import breach from "./routes/breach";
 import notices from "./routes/notices";
 import { evaluateAll } from "./lib/schedule";
@@ -227,6 +228,16 @@ app.use("/api/reports/*", async (c, next) => {
   await next();
 });
 app.route("/api/reports", reports);
+
+// Case dossier: angles, lines, findings, report versions and the
+// operator's sealed notes for the one investigation. Findings and notes
+// are operator-only; nothing here is a public surface.
+app.use("/api/dossier/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/dossier", dossier);
 
 // Scheduler: evaluates stored frequencies and renders what is due
 // through the shared publish path (gates still apply). Operator-only;

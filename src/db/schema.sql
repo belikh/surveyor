@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS entity_reveals (
 );
 CREATE INDEX IF NOT EXISTS ix_entity_reveals_hmac ON entity_reveals(name_hmac);
 
+-- Case dossier operator notes. Sealed at rest; the operator-gated dossier
+-- opens them beside the machine-gathered investigation state.
+CREATE TABLE IF NOT EXISTS dossier_notes (
+  id TEXT PRIMARY KEY,
+  body_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS topics (
   submission_id TEXT NOT NULL,
   topic TEXT NOT NULL,
