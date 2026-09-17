@@ -103,6 +103,13 @@ Checks security headers, public status, the survey shell, a proof-of-work
 submission round trip, and (with the token) the at-rest ciphertext audit.
 Per-check receipts; exits non-zero on any failure.
 
+The browser PDF path is checked by `test/browser-check.test.ts`, part of
+`npm test`: it loads the served survey shell and drives the served PDF.js
+tools through a `BrowserDriver` seam (`src/lib/browser.ts`) that extracts and
+rasterises a fixture PDF, so it runs in CI with no browser binary. No real
+headless browser has been run yet — the seam is where a Playwright/CDP driver
+drops in for that live check.
+
 Against the local runtime (workerd via wrangler, no account needed):
 
 ```sh

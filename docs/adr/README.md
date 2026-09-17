@@ -47,7 +47,8 @@ the code still falls short of a decision, with the owning ticket.
   Digital lanes parse natively (C1 #32, C2 #33) with the model pass as the
   fallback, the browser rasterisation path ships with the served PDF.js worker
   asset (A5, #6), and the dependency-free parser choice is recorded in 0002's
-  amendment.
+  amendment. The headless-browser check runs against an in-process seam in CI
+  (A6, #7); a real-browser driver run is still pending.
 - **0003** — research lines exist with citation validation and spend caps but do
   not research autonomously; a line completes through the operator's findings
   POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding
