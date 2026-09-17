@@ -172,3 +172,17 @@ CREATE TABLE IF NOT EXISTS breach_assessments (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- Generated privacy and collection notices (APP 1, APP 5). Notices are
+-- public documents, so they are stored unsealed; every append-only version
+-- carries the data-flow snapshot it was generated from.
+CREATE TABLE IF NOT EXISTS notice_versions (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  data_flows_json TEXT NOT NULL,
+  operator_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (type, version)
+);
