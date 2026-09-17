@@ -15,13 +15,31 @@ import { recordTurn } from "./telemetry";
 import type { ModelClient } from "./serve";
 
 /** Per-line caps. Steps count model turns; tokens are approximated from
- *  prompt and completion length because the client exposes text only. */
+ *  prompt and completion length because the client exposes text only.
+ *  Spend is metered from provider-reported usage and the line's own
+ *  spend_cap takes precedence over the default here. */
 export interface LoopCaps {
   steps: number;
   tokens: number;
+  spend: number;
+  wallMs: number;
 }
 
-export const RESEARCH_CAPS: LoopCaps = { steps: 8, tokens: 20_000 };
+export const RESEARCH_CAPS: LoopCaps = {
+  steps: 8,
+  tokens: 20_000,
+  spend: 20_000,
+  wallMs: 120_000,
+};
+
+/** Real-spend wiring for the loop: the line's cap, its recorded total, a
+ *  meter that persists provider-reported usage, and an injectable clock. */
+export interface LoopBudget {
+  spendCap: number;
+  spendUsed: number;
+  meter?: (tokens: number) => Promise<number>;
+  now?: () => number;
+}
 
 export interface Citation {
   doc_id: string;
@@ -99,8 +117,8 @@ const ActionSchema = z.union([
   }),
 ]);
 
-/** ~4 characters per token both ways: the ModelClient exposes text only,
- *  and exact usage accounting belongs to the spend work (B2). */
+/** ~4 characters per token both ways. Used only for the token runaway cap
+ *  when a client reports no usage; spend is metered from real usage. */
 function approxTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
@@ -174,12 +192,17 @@ export async function floorLoop(
  * occurs verbatim in a document this line fetched; anything less degrades
  * to the floor. Unknown tools, unparseable turns and provider errors are
  * model failures and degrade the same way.
+ *
+ * Spend is real: every call's provider-reported usage lands on the line's
+ * spend row, and the moment that total reaches the line cap the loop holds
+ * the line rather than buying another turn.
  */
 export async function liveLoop(
   client: ModelClient,
   toolbox: CorpusToolbox,
   angle: AngleBrief,
   caps: LoopCaps,
+  budget: LoopBudget,
 ): Promise<LoopOutcome> {
   const header =
     `Research the investigative angle "${angle.title}" using only the ` +
@@ -192,28 +215,55 @@ export async function liveLoop(
     `document you fetched.`;
   const transcript: string[] = [];
   const fetched = new Map<string, string>();
+  const now = budget.now ?? Date.now;
+  const started = now();
   let steps = 0;
   let tokens = 0;
+  let spendUsed = budget.spendUsed;
+  const capped = (reason: string): LoopOutcome => ({
+    kind: "held",
+    flags: ["cap-exceeded"],
+    reason,
+    tier: client.tier,
+    steps,
+  });
   while (true) {
     if (steps >= caps.steps || tokens >= caps.tokens) {
-      return {
-        kind: "held",
-        flags: ["cap-exceeded"],
-        reason: `caps exhausted after ${steps} step(s)`,
-        tier: client.tier,
-        steps,
-      };
+      return capped(`caps exhausted after ${steps} step(s)`);
+    }
+    if (spendUsed >= budget.spendCap) {
+      return capped(
+        `spend cap reached (${spendUsed} of ${budget.spendCap} tokens)`,
+      );
+    }
+    if (now() - started >= caps.wallMs) {
+      return capped(`wall-time budget exhausted after ${steps} step(s)`);
     }
     const prompt = [header, ...transcript].join("\n");
     let raw: string;
     try {
-      raw = await client.complete(prompt);
+      let reported = 0;
+      raw = await client.complete(prompt, (usage) => {
+        reported += usage.tokens;
+      });
+      tokens += reported > 0 ? reported : approxTokens(prompt) + approxTokens(raw);
+      if (reported > 0) {
+        spendUsed = budget.meter
+          ? await budget.meter(reported)
+          : spendUsed + reported;
+      }
     } catch {
       const floor = await floorLoop(toolbox, angle);
       return { ...floor, tier: "extractive-fallback", steps };
     }
-    tokens += approxTokens(prompt) + approxTokens(raw);
     steps++;
+    // The call just paid for pushed the line to its cap: halt here, before
+    // another turn is bought, even if this turn carried a final action.
+    if (spendUsed >= budget.spendCap) {
+      return capped(
+        `spend cap reached (${spendUsed} of ${budget.spendCap} tokens)`,
+      );
+    }
     let action: z.infer<typeof ActionSchema>;
     try {
       action = ActionSchema.parse(JSON.parse(raw));
@@ -322,6 +372,8 @@ export interface ResearchReceipt {
   citations: number;
   flags: string[];
   reason: string | null;
+  /** Provider-reported tokens recorded on the line's spend row. */
+  spend_used: number;
 }
 
 function parseStringArray(raw: string | undefined): string[] {
@@ -357,13 +409,21 @@ export async function runResearchLine(
   kit: VaultKit,
   lineId: string,
   client: ModelClient | null,
-  opts: { caps?: LoopCaps } = {},
+  opts: { caps?: LoopCaps; now?: () => number } = {},
 ): Promise<ResearchReceipt> {
   const caps = opts.caps ?? RESEARCH_CAPS;
   const line = await db
-    .prepare("SELECT id, angle_id, status FROM research_lines WHERE id = ?")
+    .prepare(
+      "SELECT id, angle_id, status, spend_cap, spend_used FROM research_lines WHERE id = ?",
+    )
     .bind(lineId)
-    .first<{ id: string; angle_id: string; status: string }>();
+    .first<{
+      id: string;
+      angle_id: string;
+      status: string;
+      spend_cap: number;
+      spend_used: number;
+    }>();
   if (!line) {
     return {
       line_id: lineId,
@@ -373,6 +433,7 @@ export async function runResearchLine(
       citations: 0,
       flags: [],
       reason: "line not found",
+      spend_used: 0,
     };
   }
   if (line.status !== "running") {
@@ -384,6 +445,7 @@ export async function runResearchLine(
       citations: 0,
       flags: [],
       reason: `line ${line.status}`,
+      spend_used: line.spend_used,
     };
   }
   const angleRow = await db
@@ -412,8 +474,27 @@ export async function runResearchLine(
     exhibits: parseExhibits(angleRow?.exhibits_json),
   };
   const toolbox = buildCorpusToolbox(db, kit);
+  // Real spend: the operator's per-line cap (falling back to the loop
+  // default for legacy rows), metered from provider-reported usage.
+  const spendCap = line.spend_cap > 0 ? line.spend_cap : caps.spend;
+  let spendUsed = line.spend_used;
+  const meter = async (tokens: number): Promise<number> => {
+    await db
+      .prepare(
+        "UPDATE research_lines SET spend_used = spend_used + ? WHERE id = ? AND status = 'running'",
+      )
+      .bind(tokens, lineId)
+      .run();
+    spendUsed += tokens;
+    return spendUsed;
+  };
   const outcome = client
-    ? await liveLoop(client, toolbox, angle, caps)
+    ? await liveLoop(client, toolbox, angle, caps, {
+        spendCap,
+        spendUsed,
+        meter,
+        now: opts.now,
+      })
     : await floorLoop(toolbox, angle);
 
   let receipt: ResearchReceipt;
@@ -432,6 +513,7 @@ export async function runResearchLine(
           citations: outcome.citations.length,
           flags: finished.flags,
           reason: null,
+          spend_used: spendUsed,
         }
       : {
           line_id: lineId,
@@ -441,6 +523,7 @@ export async function runResearchLine(
           citations: outcome.citations.length,
           flags: [],
           reason: finished.error,
+          spend_used: spendUsed,
         };
     telemetryOutcome = finished.ok ? finished.status : finished.error;
   } else {
@@ -458,6 +541,7 @@ export async function runResearchLine(
       citations: 0,
       flags: outcome.flags,
       reason: outcome.reason,
+      spend_used: spendUsed,
     };
     telemetryOutcome = outcome.flags.includes("cap-exceeded")
       ? "capped"

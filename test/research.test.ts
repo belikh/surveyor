@@ -198,7 +198,7 @@ describe("capped research loop", () => {
       complete: async () => JSON.stringify({ tool: "search", query: "roster" }),
     };
     const receipt = await runResearchLine(env.DB as never, kit, lineId, searching, {
-      caps: { steps: 2, tokens: 100_000 },
+      caps: { steps: 2, tokens: 100_000, spend: 100_000, wallMs: 60_000 },
     });
     expect(receipt.status).toBe("held");
     expect(receipt.steps).toBe(2);
@@ -233,7 +233,7 @@ describe("capped research loop", () => {
         }),
     };
     const receipt = await runResearchLine(env.DB as never, kit, lineId, chatty, {
-      caps: { steps: 50, tokens: 100 },
+      caps: { steps: 50, tokens: 100, spend: 100_000, wallMs: 60_000 },
     });
     expect(receipt.status).toBe("held");
     expect(receipt.steps).toBe(1);
