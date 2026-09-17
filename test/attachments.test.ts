@@ -76,14 +76,17 @@ async function upload(
   });
 }
 
-/** Chunked framing: a stream body carries no content-length, and the route
- *  must not reach for `arrayBuffer()` — that is the buffering seam. */
+/** Streamed framing: the route must never reach for `arrayBuffer()` — that
+ *  is the buffering seam. With `declaredLength` the body takes the workerd
+ *  FixedLengthStream path (streamed straight to R2); without one it is a
+ *  chunked body, buffered under the cap (A15 workerd rule). */
 async function streamedUpload(
   env: Record<string, unknown>,
   id: string,
   code: string,
   chunks: Uint8Array[],
   filename = "scan.png",
+  declaredLength?: number,
 ) {
   let i = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -92,13 +95,17 @@ async function streamedUpload(
       else controller.close();
     },
   });
+  const headers: Record<string, string> = {
+    "x-access-code": code,
+    "x-filename": encodeURIComponent(filename),
+    "content-type": "image/png",
+  };
+  if (declaredLength !== undefined) {
+    headers["content-length"] = String(declaredLength);
+  }
   const init = {
     method: "POST",
-    headers: {
-      "x-access-code": code,
-      "x-filename": encodeURIComponent(filename),
-      "content-type": "image/png",
-    },
+    headers,
     body,
     duplex: "half",
   } as RequestInit;
@@ -184,6 +191,7 @@ describe("submitter attachments (R6, FR-045-050)", () => {
       code,
       chunks,
       "big.bin",
+      ATTACH_MAX_BYTES,
     );
     expect(res.status).toBe(201);
     // The object store received a stream, not an arrayBuffer: the 50 MB
@@ -200,7 +208,16 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     const { id, code } = await createSubmission(env);
     const chunks = Array.from({ length: 50 }, () => new Uint8Array(1024 * 1024));
     chunks.push(new Uint8Array([1]));
-    const res = await streamedUpload(env, id, code, chunks, "bigger.bin");
+    // The declared length is a lie the FixedLengthStream catches: the body
+    // overruns it mid-put and no object survives.
+    const res = await streamedUpload(
+      env,
+      id,
+      code,
+      chunks,
+      "bigger.bin",
+      ATTACH_MAX_BYTES,
+    );
     expect(res.status).toBe(413);
     expect(((await res.json()) as { error: string }).error).toBe("too_large");
     expect((env.CORPUS as FakeR2).keys()).toEqual([]);

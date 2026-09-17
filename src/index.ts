@@ -117,8 +117,14 @@ app.onError((err, c) => {
       503,
     );
   }
-  // Never echo internal error detail to the client; route handlers map
-  // known failures to their own statuses, everything else is a 400.
+  // The stack goes to the operator's own logs for diagnosis; the client
+  // never sees internal detail, and no request identifier is logged.
+  console.error(
+    "unhandled worker error",
+    err instanceof Error ? err.stack ?? err.message : String(err),
+  );
+  // Route handlers map known failures to their own statuses; everything
+  // else is a 400.
   return c.json({ error: "bad_request" }, 400);
 });
 

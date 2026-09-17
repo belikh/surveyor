@@ -19,6 +19,7 @@ import {
 } from "../lib/ingest";
 import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
 import type { QuarantineHit } from "../lib/intake";
+import { storeBody } from "../lib/upload";
 
 export const corpus = new Hono<{ Bindings: Bindings }>();
 
@@ -53,49 +54,31 @@ corpus.post("/", async (c) => {
   const id = crypto.randomUUID();
   const key = `corpus/${id}`;
   const status = statusFor(typed.lane);
-  // Count and cap while forwarding (A14 idiom): held-lane bytes stream
-  // straight into R2 so a large scan never sits in isolate memory, and a
-  // chunked request gets an exact size from the stream itself. Native text
-  // must be decoded whole for the mirror, so its chunks are collected — only
-  // for that lane, and only up to the cap.
-  let size = 0;
-  let overCap = false;
-  const chunks: Uint8Array[] = [];
-  const counted = body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        size += chunk.byteLength;
-        if (size > MAX_DOC_BYTES) {
-          overCap = true;
-          controller.error(new Error("document exceeds the per-file cap"));
-          return;
-        }
-        if (status === "parsed") chunks.push(chunk);
-        controller.enqueue(chunk);
-      },
-    }),
-  );
-
-  // Held bytes stream into R2 when the object store is bound; without it
-  // (local, tests) the stream is still counted so the cap holds. Parsed text
-  // is never retained raw.
-  let stored = false;
-  try {
-    if (status === "held" && c.env.CORPUS) {
-      await c.env.CORPUS.put(key, counted);
-      stored = true;
-    } else {
-      const reader = counted.getReader();
-      for (;;) {
-        const { done } = await reader.read();
-        if (done) break;
-      }
-    }
-  } catch (err) {
-    if (overCap) {
-      return c.json({ error: "rejected", detail: "size exceeds cap" }, 422);
-    }
-    throw err;
+  // Count and cap while forwarding (A14/A15): a declared content-length
+  // streams straight into R2 (the FixedLengthStream path), a chunked body is
+  // buffered under the cap. Native text is collected for the in-request
+  // decode; held bytes are never retained raw.
+  const declaredHeader = c.req.header("content-length");
+  const declaredLength =
+    declaredHeader === undefined ? null : Number(declaredHeader);
+  if (
+    declaredLength !== null &&
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_DOC_BYTES
+  ) {
+    return c.json({ error: "rejected", detail: "size exceeds cap" }, 422);
+  }
+  const forwarded = await storeBody(body, {
+    cap: MAX_DOC_BYTES,
+    collect: status === "parsed",
+    declaredLength,
+    bucket: status === "held" && c.env.CORPUS ? c.env.CORPUS : null,
+    key,
+  });
+  const size = forwarded.size;
+  const stored = forwarded.stored;
+  if (forwarded.overCap) {
+    return c.json({ error: "rejected", detail: "size exceeds cap" }, 422);
   }
 
   // Authoritative classification on the counted length: empty and over-cap
@@ -109,15 +92,12 @@ corpus.post("/", async (c) => {
   // Text extraction per lane. Only the native text lane decodes in-request;
   // every other lane records held status — the model pass (T5) drains them.
   let raw = "";
-  if (status === "parsed") {
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
+  if (status === "parsed" && forwarded.bytes) {
     try {
-      raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
+      raw = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: false,
+      }).decode(forwarded.bytes);
     } catch {
       return c.json({ error: "rejected", detail: "not decodable text" }, 422);
     }

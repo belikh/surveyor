@@ -115,7 +115,9 @@ try {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   // Corpus uploads stream (A15): the bytes are the body, the filename rides
-  // in `x-filename` (A11), never a base64 JSON field.
+  // in `x-filename` (A11), never a base64 JSON field. The declared length
+  // exercises the workerd FixedLengthStream path (R2 `put` rejects streams
+  // of unknown length).
   const upload = (filename, mediaType, body) =>
     mf.dispatchFetch(`${base}/api/corpus`, {
       method: "POST",
@@ -123,6 +125,7 @@ try {
         authorization: `Bearer ${TOKEN}`,
         "x-filename": encodeURIComponent(filename),
         "content-type": mediaType,
+        "content-length": String(new TextEncoder().encode(body).byteLength),
       },
       body,
     });
@@ -140,7 +143,8 @@ try {
     });
     const up = await upload("scan.png", "image/png", "fake-scan-bytes");
     if (up.status !== 200) {
-      throw new Error(`held upload answered HTTP ${up.status}`);
+      const detail = (await up.text()).slice(0, 200);
+      throw new Error(`held upload answered HTTP ${up.status}: ${detail}`);
     }
     const turn = await waitFor("the queue consumer to drain the held doc", async () => {
       const row = await db

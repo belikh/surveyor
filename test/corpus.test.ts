@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import app from "../src/index";
+import { MAX_DOC_BYTES } from "../src/lib/ingest";
 import { FakeD1 } from "./helpers/d1";
 import { FakeR2 } from "./helpers/r2";
 
@@ -46,14 +47,17 @@ async function upload(
   });
 }
 
-/** Chunked framing: the stream carries no content-length, and the route must
- *  read it through the body stream, never `arrayBuffer()` — that is the
- *  buffering seam. */
+/** Streamed framing: the route must read the body through the stream, never
+ *  `arrayBuffer()` — that is the buffering seam. With `declaredLength` the
+ *  body takes the workerd FixedLengthStream path (streamed straight to R2);
+ *  without one it is a chunked body, buffered under the cap (A15 workerd
+ *  rule). */
 async function streamedUpload(
   env: Record<string, unknown>,
   filename: string,
   mediaType: string,
   chunks: Uint8Array[],
+  declaredLength?: number,
 ) {
   let i = 0;
   const body = new ReadableStream<Uint8Array>({
@@ -62,13 +66,17 @@ async function streamedUpload(
       else controller.close();
     },
   });
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${TOKEN}`,
+    "x-filename": encodeURIComponent(filename),
+    "content-type": mediaType,
+  };
+  if (declaredLength !== undefined) {
+    headers["content-length"] = String(declaredLength);
+  }
   const req = new Request("https://surveyor.example/api/corpus", {
     method: "POST",
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      "x-filename": encodeURIComponent(filename),
-      "content-type": mediaType,
-    },
+    headers,
     body,
     duplex: "half",
   } as RequestInit);
@@ -163,7 +171,7 @@ describe("corpus routes", () => {
     expect(res.status).toBe(422);
   });
 
-  it("decodes a chunked native upload without buffering and mirrors the text", async () => {
+  it("decodes a chunked native upload (no arrayBuffer call) and mirrors the text", async () => {
     const env = makeEnv();
     const chunks = [
       new TextEncoder().encode("Rosters are "),
@@ -198,7 +206,13 @@ describe("corpus routes", () => {
       } as never,
     });
     const chunks = Array.from({ length: 25 }, () => new Uint8Array(1024 * 1024));
-    const res = await streamedUpload(env, "big-scan.png", "image/png", chunks);
+    const res = await streamedUpload(
+      env,
+      "big-scan.png",
+      "image/png",
+      chunks,
+      MAX_DOC_BYTES,
+    );
     expect(res.status).toBe(200);
     // The object store received a stream, not an arrayBuffer: the 25 MB body
     // never sat in isolate memory.
@@ -218,7 +232,15 @@ describe("corpus routes", () => {
     const env = makeEnv({ CORPUS: r2 as never });
     const chunks = Array.from({ length: 25 }, () => new Uint8Array(1024 * 1024));
     chunks.push(new Uint8Array([1]));
-    const res = await streamedUpload(env, "bigger.png", "image/png", chunks);
+    // The declared length is a lie the FixedLengthStream catches: the body
+    // overruns it mid-put and no object survives.
+    const res = await streamedUpload(
+      env,
+      "bigger.png",
+      "image/png",
+      chunks,
+      MAX_DOC_BYTES,
+    );
     expect(res.status).toBe(422);
     expect(((await res.json()) as { error: string }).error).toBe("rejected");
     expect(r2.keys()).toEqual([]);

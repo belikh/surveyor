@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   test: {
     environment: "node",
+    setupFiles: ["./test/helpers/workerd-globals.ts"],
     exclude: [...configDefaults.exclude, "test/live.*.test.ts"],
   },
   resolve: {

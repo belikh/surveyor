@@ -55,6 +55,7 @@ import {
   attachmentLane,
   drainAttachmentById,
 } from "../lib/attachments";
+import { storeBody } from "../lib/upload";
 
 type Env = { Bindings: Bindings };
 
@@ -384,44 +385,37 @@ intake.post("/:id/attachments", async (c) => {
   if (lane === "rejected") {
     return c.json({ error: "rejected", detail: "unsupported type" }, 422);
   }
-  const declared = Number(c.req.header("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > ATTACH_MAX_BYTES) {
+  const declaredHeader = c.req.header("content-length");
+  const declaredLength =
+    declaredHeader === undefined ? null : Number(declaredHeader);
+  if (
+    declaredLength !== null &&
+    Number.isFinite(declaredLength) &&
+    declaredLength > ATTACH_MAX_BYTES
+  ) {
     return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
   }
   const body = c.req.raw.body;
   if (!body) return c.json({ error: "empty_file" }, 422);
   const attId = crypto.randomUUID();
   const key = `attachments/${id}/${attId}`;
-  // Stream the body straight into R2 through a counting, capping transform:
-  // the bytes never sit in isolate memory, and chunked requests (no
-  // content-length) still get an exact size from the stream itself. An
-  // over-cap stream errors the transform, which fails the put before the
-  // object exists.
-  let size = 0;
-  let overCap = false;
-  const counted = body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        size += chunk.byteLength;
-        if (size > ATTACH_MAX_BYTES) {
-          overCap = true;
-          controller.error(new Error("attachment exceeds the per-file cap"));
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-    }),
-  );
-  try {
-    await c.env.CORPUS.put(key, counted);
-  } catch (err) {
-    if (overCap) {
-      return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
-    }
-    throw err;
+  // Forward the body straight into R2 through the counting, capping
+  // transform: a declared content-length streams (the FixedLengthStream
+  // path), a chunked body is buffered under the cap. The bytes never reach
+  // `arrayBuffer()`, and an over-cap body fails before a usable object
+  // exists.
+  const forwarded = await storeBody(body, {
+    cap: ATTACH_MAX_BYTES,
+    declaredLength,
+    bucket: c.env.CORPUS,
+    key,
+  });
+  const size = forwarded.size;
+  if (forwarded.overCap) {
+    return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
   }
   if (size === 0) {
-    await c.env.CORPUS.delete(key);
+    if (forwarded.stored) await c.env.CORPUS.delete(key);
     return c.json({ error: "empty_file" }, 422);
   }
   const now = new Date().toISOString();
