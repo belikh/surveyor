@@ -36,6 +36,20 @@ export const ResumeBodySchema = z.object({
   access_code: AccessCodeSchema,
 });
 
+/** Reply thread (C11): the code reads the thread, never a query string. */
+export const ThreadBodySchema = z.object({
+  access_code: AccessCodeSchema,
+});
+
+export const FollowupBodySchema = z.object({
+  access_code: AccessCodeSchema,
+  value: z.string().min(1).max(10_000),
+});
+
+export const ReplyBodySchema = z.object({
+  value: z.string().min(1).max(10_000),
+});
+
 export const AddendumBodySchema = z.object({
   pow: PowProofSchema,
   access_code: z.string().min(9).max(9),
