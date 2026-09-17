@@ -2,7 +2,7 @@
 
 **Status**: Accepted (implemented 2026-09-16; live trial pending)
 
-**Deciders**: operator (user), via remediation R3 (#27)
+**Deciders**: operator (user), via remediation R3
 
 ## Context
 
@@ -48,9 +48,10 @@ Worker-side provisioner, consistent with R2's OAuth consent (ADR-0008).
 
 - **Endpoint fidelity is unverified live.** The Cloudflare create/list/delete
   shapes for D1, R2, Queues, schedules, and secrets are taken from the primary
-  sources in `installer-mechanism.md`. Workflows have no standalone API (they
-  ship in the Worker bundle), so create/get/delete are identity operations. The
-  **live deploy-destroy trial (T16 #23) must confirm every endpoint**.
+  sources in the pre-split wayfinder installer report. Workflows have no
+  standalone API (they ship in the Worker bundle), so create/get/delete are
+  identity operations. The **live deploy-destroy trial (A16 #17, A17 #18) must
+  confirm every endpoint**.
 - The Worker cannot create itself; `createWorker` is an identity operation
   because the provisioner runs inside the Worker. This is correct for the
   "ensure resources" semantics but means the Worker must already be deployed
@@ -61,6 +62,6 @@ Worker-side provisioner, consistent with R2's OAuth consent (ADR-0008).
 
 ## References
 
-- Remediation: R3 (#27)
+- Remediation: R3
 - Related: ADR-0005 (installer mechanism), ADR-0008 (OAuth consent)
 - Tests: `surveyor/test/provision.test.ts`, `surveyor/test/provision-runtime.test.ts`

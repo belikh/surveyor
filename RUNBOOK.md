@@ -20,18 +20,38 @@ npm ci && npm run build
 npx wrangler deploy
 ```
 
-Revoke the token straight after; rotate anything it touched.
+Revoke the token straight after. Do not rotate the installation's key
+material as a precaution — rotation is a deliberate, resealing action (see
+**Key rotation and re-sealing** below), and an unnecessary rotation is what
+orphans sealed rows.
 
 ## 2. First-run setup
 
 Open the installation root. The wizard (Mac OS 9 styled) walks:
 
-1. **Worker token** — paste the operator token the provision step showed.
-   Store it somewhere safe; it gates every write surface.
-2. **Providers** — optional. Add OpenAI-compatible entries (base URL, key,
-   model) or leave empty. Empty runs degraded: static question fallbacks,
-   Workers AI as the keyless tier, and a visible dashboard warning.
-3. **Instrument** — survey title, blurb, and consent copy. Consent copy is
+1. **Boot** — a fresh install has no key material, so nothing can be written
+   until the three master secrets exist. The boot panel sets `SERVER_SECRET`,
+   `ENCRYPTION_KEY` and `OPERATOR_TOKEN` in your own account: paste a
+   Cloudflare API token that can edit this Worker's secrets (Workers
+   Scripts: Edit), your account id and the script name, choose an operator
+   token (`Generate` is fine) and save it somewhere safe, then press **Boot
+   installation**. `SERVER_SECRET` and `ENCRYPTION_KEY` are minted inside the
+   Worker and never shown or returned. The operator token is your choice: the
+   panel only echoes what you typed or what the **Generate** button made in
+   your own browser, and the installation never returns it — the receipt
+   carries slot names and booleans only. Revoke the pasted Cloudflare token
+   afterwards. Alternatively, set all three yourself with
+   `npx wrangler secret put SERVER_SECRET` (then `ENCRYPTION_KEY` and
+   `OPERATOR_TOKEN`) before opening the wizard.
+2. **Worker token** — paste the operator token you chose at boot if the page
+   reloaded. It gates every write surface.
+3. **Providers** — optional. Add OpenAI-compatible entries (base URL, key,
+   model) or leave empty. Empty runs degraded: static question fallbacks and
+   deterministic (non-model) angles and report prose, with Workers AI covering
+   keyless document conversion and OCR in the ingestion lanes, plus a visible
+   dashboard warning. Workers AI is not used for chat, angles, rounds or
+   report drafting.
+4. **Instrument** — survey title, blurb, and consent copy. Consent copy is
    verbatim on the public survey.
 
 Secrets are written straight to the Cloudflare secret store; they never
@@ -43,7 +63,9 @@ Upload documents through the operator API (`POST /api/corpus`). Text files
 parse immediately; PDFs, office files, and images land in held lanes with
 their bytes in R2. `POST /api/corpus/drain` runs the model pass — with no
 capable provider configured, each file stays held with a reason naming the
-capability you need to add.
+capability you need to add. Held bytes live in R2 only for the 24-hour retry
+window: a successful drain deletes them immediately, and the scheduled sweep
+deletes anything no drain reached and records the receipt in `audit`.
 
 ## 4. Running the investigation
 
@@ -56,10 +78,12 @@ capability you need to add.
 
 ## 5. Scheduled digests
 
-The cron trigger (`0 6 * * *`) runs `scheduled()` → `evaluateAll`. Reports
-with a lapsed cadence, crossed per-N threshold, or full-dynamic change
-render through the same gated publish path. Every evaluation writes a
-receipt (`eval_receipts`) — audit them there.
+The cron trigger (`0 6 * * *`) runs `scheduled()`: first the raw-byte
+retention sweep deletes attachment and held-corpus bytes whose retry window
+has lapsed — including files no drain ever reached — and writes a receipt to
+`audit`; then `evaluateAll` renders reports with a lapsed cadence, crossed
+per-N threshold, or full-dynamic change, through the same gated publish path.
+Every evaluation writes a receipt (`eval_receipts`) — audit them there.
 
 Full-dynamic is the risky mode: it re-renders on any new evidence and
 carries a review banner. Poisoned lines are held before any render.
@@ -83,6 +107,12 @@ Against the local runtime (workerd via wrangler, no account needed):
 npm run smoke:runtime
 ```
 
+Two phases, both booting the build in workerd: `wrangler dev` with every
+binding audited over HTTP, then a primitives phase that exercises real
+queue delivery and retry, Workflow execution and persisted resume, and R2
+range and delete behaviour. Every receipt names what it exercised;
+failures name the primitive (`queue:*`, `workflow:*`, `r2:*`).
+
 ## 6. Teardown
 
 The wizard's teardown screen resets local state and reports exactly what
@@ -95,15 +125,14 @@ are listed as not-wiped.
 
 | Slot | When | Who sets |
 |---|---|---|
-| `SERVER_SECRET` | Always | Provisioning (generated) |
-| `ENCRYPTION_KEY` | Always | Provisioning (generated) |
-| `OPERATOR_TOKEN` | Always | Provisioning (generated) |
+| `SERVER_SECRET` | Always | Boot panel (minted in-Worker) or operator |
+| `ENCRYPTION_KEY` | Always | Boot panel (minted in-Worker) or operator |
+| `OPERATOR_TOKEN` | Always | Operator's choice, entered at boot |
 | `GROQ_API_KEY` | Optional | Operator |
 | `TOKENROUTER_API_KEY` | Optional | Operator |
 | `TURNSTILE_SECRET` | Optional | Operator |
 | `TURNSTILE_SITEKEY` | Optional (var, not a secret) | Operator |
 | `CF_OAUTH_CLIENT_ID` + endpoints | Optional (vars) | Operator |
-| `CF_OAUTH_CLIENT_SECRET` | Optional | Operator |
 | `PUBLIC_BASE_URL` | Required for launch packs (optional otherwise) | Operator |
 
 Never paste a secret value into a transcript, issue, or commit.
@@ -130,3 +159,21 @@ collecting testimony.
 
 Rows sealed under a key you no longer hold cannot be recovered. `GET
 /api/status` reports `provisioned: false` while key material is missing.
+
+## Errata
+
+Corrections made when this document was audited against the code (A7, #8);
+each names the claim that changed.
+
+- **2026-09-17** — "Workers AI as the keyless tier" implied the model runs
+  everywhere. It serves the ingestion lanes (document conversion and OCR);
+  angles, rounds and report prose degrade to deterministic output with no
+  Workers AI call. The providers step now says so.
+- **2026-09-17** — the boot step said the operator token "is shown only on that
+  panel", which read as the installation returning it. No code path returns
+  it: the panel echoes the operator's own typed or browser-generated value and
+  the receipt carries slot names and booleans only.
+- **2026-09-17** — the fallback install path said to "rotate anything it
+  touched" after using a scoped token. Rotation is deliberate, requires
+  resealing existing rows, and a needless rotation is what orphans sealed
+  data; the line now warns against it.

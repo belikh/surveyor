@@ -268,20 +268,33 @@ function operatorDenied(c: {
 // Submitter attachments (FR-045-FR-050): raw bytes stream through the Worker
 // into a private R2 key, then drain to testimony and are deleted. Filenames
 // are sealed; caps are per-file (50 MB) and per-submission (200 MB).
+//
+// The access code, filename and media type travel in headers — never the
+// query string — so edge request logs cannot see identifiers (A11). The
+// filename header is percent-encoded so non-ASCII names survive.
+function decodeFilename(raw: string | undefined): string {
+  if (!raw) return "attachment";
+  try {
+    return decodeURIComponent(raw).slice(0, 256);
+  } catch {
+    return raw.slice(0, 256);
+  }
+}
+
 intake.post("/:id/attachments", async (c) => {
   const app = await getState(c.env);
   const idOr = idOr404(c);
   if (typeof idOr !== "string") return idOr;
   const id = idOr;
-  const code = c.req.query("access_code") ?? "";
+  const code = c.req.header("x-access-code") ?? "";
   const sub = await submissionByCode(c, id, code);
   if (!sub) return c.json({ error: "not_found" }, 404);
   if (sub.status !== "open") {
     return c.json({ error: "submission_closed" }, 409);
   }
   if (!c.env.CORPUS) return c.json({ error: "attachments_unavailable" }, 503);
-  const filename = (c.req.query("filename") ?? "attachment").slice(0, 256);
-  const mediaType = (c.req.query("media_type") ?? "application/octet-stream").slice(
+  const filename = decodeFilename(c.req.header("x-filename"));
+  const mediaType = (c.req.header("content-type") ?? "application/octet-stream").slice(
     0,
     128,
   );
@@ -295,18 +308,49 @@ intake.post("/:id/attachments", async (c) => {
   if (Number.isFinite(declared) && declared > ATTACH_MAX_BYTES) {
     return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
   }
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  if (bytes.length === 0) return c.json({ error: "empty_file" }, 422);
-  if (bytes.length > ATTACH_MAX_BYTES) {
-    return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
-  }
+  const body = c.req.raw.body;
+  if (!body) return c.json({ error: "empty_file" }, 422);
   const attId = crypto.randomUUID();
   const key = `attachments/${id}/${attId}`;
+  // Stream the body straight into R2 through a counting, capping transform:
+  // the bytes never sit in isolate memory, and chunked requests (no
+  // content-length) still get an exact size from the stream itself. An
+  // over-cap stream errors the transform, which fails the put before the
+  // object exists.
+  let size = 0;
+  let overCap = false;
+  const counted = body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        size += chunk.byteLength;
+        if (size > ATTACH_MAX_BYTES) {
+          overCap = true;
+          controller.error(new Error("attachment exceeds the per-file cap"));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+  try {
+    await c.env.CORPUS.put(key, counted);
+  } catch (err) {
+    if (overCap) {
+      return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
+    }
+    throw err;
+  }
+  if (size === 0) {
+    await c.env.CORPUS.delete(key);
+    return c.json({ error: "empty_file" }, 422);
+  }
   const now = new Date().toISOString();
-  // Reserve quota and row in one statement: a read-then-write lets
-  // concurrent uploads all pass the same stale SUM. INSERT ... SELECT ...
-  // WHERE is a single SQLite statement, so D1 applies it under the write
-  // lock and the quota cannot be raced.
+  // Reserve quota and row in one statement after the stream settles: a
+  // read-then-write lets concurrent uploads all pass the same stale SUM.
+  // INSERT ... SELECT ... WHERE is a single SQLite statement, so D1 applies
+  // it under the write lock and the quota cannot be raced. The size is the
+  // counted stream length, never a client-supplied header. A rejected
+  // reservation deletes the object it streamed: no orphan bytes.
   const reserved = await c.env.DB.prepare(
     "INSERT INTO attachments (id, submission_id, filename, media_type, size_bytes, status, raw_key, lane, reason, retry_after, created_at) " +
       "SELECT ?, ?, ?, ?, ?, 'uploaded', ?, ?, NULL, NULL, ? " +
@@ -317,30 +361,21 @@ intake.post("/:id/attachments", async (c) => {
       id,
       await sealText(app.kit, filename),
       mediaType,
-      bytes.length,
+      size,
       key,
       lane,
       now,
       id,
-      bytes.length,
+      size,
       ATTACH_TOTAL_BYTES,
     )
     .run();
   if (reserved.meta.changes === 0) {
+    await c.env.CORPUS.delete(key);
     return c.json(
       { error: "quota_exceeded", detail: "200 MB per submission" },
       413,
     );
-  }
-  // Bytes reach R2 only after the reservation; a failed write rolls the
-  // reservation back so a rejected request leaves no orphan row.
-  try {
-    await c.env.CORPUS.put(key, bytes);
-  } catch (err) {
-    await c.env.DB.prepare("DELETE FROM attachments WHERE id = ?")
-      .bind(attId)
-      .run();
-    throw err;
   }
   if (c.env.INGEST) {
     await c.env.INGEST.send({ doc_id: attId, lane: "attachment", kind: "attachment" });

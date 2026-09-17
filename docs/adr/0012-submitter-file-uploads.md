@@ -1,6 +1,8 @@
 # ADR-0012: Submitter file uploads under a controlled Principle I exception
 
-**Status**: Accepted (2026-09-16, user-approved exception recorded in plan.md)
+**Status**: Accepted (2026-09-16, user-approved exception recorded in the
+pre-split spec's Complexity Tracking table; the spec is not carried into this
+repository)
 
 **Deciders**: operator (user), 2026-09-16 grilling
 
@@ -19,13 +21,19 @@ while OCR runs server-side.
 - **In scope**: submitter file uploads, built alongside R6.
 - **Pipeline**: digital-text PDFs are extracted **in-browser** and submitted as
   text only. Scanned PDFs are rasterised **in-browser** (self-hosted PDF.js);
-  the page images upload **through the Worker** (streamed, not buffered) into a
-  **private R2 key**. The server vision-OCRs the pages, runs the name-leak gate,
-  then **deletes** the raw bytes.
+  the page images upload **through the Worker** into a **private R2 key**. The
+  server vision-OCRs the pages, runs the name-leak gate, then **deletes** the
+  raw bytes. **Amendment (2026-09-17)**: submitter attachments and corpus
+  uploads stream through the Worker into R2 through a counting, capping
+  transform (A14, #15; A15, #16); held-lane bytes never sit in isolate memory,
+  and native corpus text decodes from the counted stream.
 - **Failure**: a bounded **24 h retry window** keeps the raw pages for retry,
-  then deletes them.
+  then deletes them. The window is enforced by the scheduled raw-byte sweep
+  (`src/lib/retention.ts`, A3), which deletes bytes no drain reached — even
+  when a file never drains at all — and records a deletion receipt.
 - **Limits**: no file-count limit; **50 MB per file**; **200 MB per
-  submission**; PDFs, images, docx/xlsx.
+  submission**; PDFs, images, docx/xlsx/pptx (amended 2026-09-17:
+  `attachmentLane` also accepts pptx).
 - **Custody**: extracted text joins the submission's **testimony only**,
   quarantined and sealed like free-text. Reaching the corpus mirror requires a
   separate, audited operator promotion.
@@ -36,8 +44,9 @@ while OCR runs server-side.
   disproportionate, and presigned direct-to-R2 was rejected to avoid new S3
   credentials and a plaintext path that skips the Worker.
 
-The exception is recorded in `specs/002-investigation-platform/plan.md`
-(Complexity Tracking) as a user-approved violation of Principle I.
+The exception was recorded in the pre-split spec's Complexity Tracking table
+as a user-approved violation of Principle I; that spec is not carried into this
+repository, so this ADR and `THREAT-MODEL.md` T11 are its record here.
 
 ## Consequences
 
@@ -61,5 +70,6 @@ The exception is recorded in `specs/002-investigation-platform/plan.md`
 
 ## References
 
-- Spec FR-045–FR-050; plan.md Complexity Tracking
+- Spec FR-045–FR-050; the pre-split spec's Complexity Tracking table (not
+  carried into this repository)
 - Related: ADR-0011 (rasterisation), ADR-0002 (ingestion custody)

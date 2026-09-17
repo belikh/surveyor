@@ -109,8 +109,10 @@ describe("GET /api/status", () => {
     expect(body.degraded).toBe(true);
     expect(body.warning).toMatch(/static fallback/i);
     expect(body.provisioned).toBe(true);
+    expect(body.operator_token_set).toBe(true);
     expect(Object.keys(body).sort()).toEqual([
       "degraded",
+      "operator_token_set",
       "provisioned",
       "warning",
     ]);

@@ -13,8 +13,9 @@ LLM or a transcript. The options surveyed (against Cloudflare primary sources)
 were deploy-to-Cloudflare buttons, Workers for Platforms, wrangler-guided
 deploy, and direct API provisioning.
 
-Primary source: `.scratch/cloudflare-native/research/installer-mechanism.md`
-(§1 deploy buttons, §3 wrangler, §4 direct API, §5 teardown, §6 recommendation).
+Primary source: the pre-split wayfinder installer research (§1 deploy buttons,
+§3 wrangler, §4 direct API, §5 teardown, §6 recommendation; not carried into
+this repository).
 
 ## Decision
 
@@ -57,10 +58,13 @@ Cloudflare account logs, analytics, and backup retention are explicitly *not*.
 - Workers for Platforms is rejected for per-owner installs (wrong tenancy,
   $25/month gate).
 - The minimal token scope set and deploy-button D1-migration reliability remain
-  **unverified** until a live deploy-destroy trial (see R3, #27, and T16 #23).
+  **unverified** until a live deploy-destroy trial (see R3; the live trials
+  are A16 #17 and A17 #18).
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t02-installer.md`
-- Research: `.scratch/cloudflare-native/research/installer-mechanism.md`
-- Remediation against the current build: R3 (#27)
+- Wayfinder ticket: `t02-installer` (pre-split; not carried into this
+  repository)
+- Research: pre-split wayfinder installer report (not carried into this
+  repository)
+- Remediation against the current build: R3

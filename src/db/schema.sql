@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS corpus_docs (
   text_envelope TEXT NOT NULL,
   raw_key TEXT,
   reason TEXT,
+  -- Bounded raw-bytes window (absolute); reset by a failed drain.
+  retry_after TEXT,
   created_at TEXT NOT NULL
 );
 

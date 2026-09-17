@@ -204,12 +204,17 @@ function loadPdfTools() {
   });
 }
 async function sendAttachment(id, name, type, blob) {
-  const res = await fetch(
-    "/api/intake/" + id + "/attachments?filename=" + encodeURIComponent(name) +
-      "&media_type=" + encodeURIComponent(type) +
-      "&access_code=" + encodeURIComponent(S.code),
-    { method: "POST", body: blob },
-  );
+  // Identifiers travel in headers, never the query string, so edge request
+  // logs cannot see the access code or filename (A11).
+  const res = await fetch("/api/intake/" + id + "/attachments", {
+    method: "POST",
+    headers: {
+      "x-access-code": S.code,
+      "x-filename": encodeURIComponent(name),
+      "content-type": type || "application/octet-stream",
+    },
+    body: blob,
+  });
   if (!res.ok) throw new Error(String(res.status));
 }
 async function attachFile(f, note) {

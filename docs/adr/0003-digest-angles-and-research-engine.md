@@ -13,8 +13,8 @@ should retrigger from an intermediate stage without duplicating work or rebillin
 Two of its components (an angle proposer and a significance judge) are
 themselves LLM calls, which sit inside the trust boundary they help enforce.
 
-Primary sources: `.scratch/cloudflare-native/issues/t04-digest-research.md`
-(operator decisions Q-sheet, 2026-09-14).
+Primary source: the pre-split wayfinder ticket `t04-digest-research` (operator
+decisions Q-sheet, 2026-09-14; not carried into this repository).
 
 ## Decision
 
@@ -65,5 +65,6 @@ directly.
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t04-digest-research.md`
-- Remediation against the current build: R4 (#28)
+- Wayfinder ticket: `t04-digest-research` (pre-split; not carried into this
+  repository)
+- Remediation against the current build: R4

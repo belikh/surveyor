@@ -2,7 +2,7 @@
 
 **Status**: Accepted (2026-09-16, user decisions under grilling)
 
-**Deciders**: operator (user), remediation R7 (#30)
+**Deciders**: operator (user), remediation R7
 
 ## Context
 
@@ -48,5 +48,5 @@ digests). The operator chose to implement it.
 
 ## References
 
-- Remediation: R7 (#30); spec FR-036
+- Remediation: R7; spec FR-036
 - Related: ADR-0004 (report surface), ADR-0003 (engine/grounding)

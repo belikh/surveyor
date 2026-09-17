@@ -79,13 +79,15 @@ bucket** until drained.
   are never agent-visible.
 - **Mitigating controls**: the bucket is private and bound to one installation in
   the operator's account; the key is a random doc id; no application logging of
-  file contents; raw bytes are deleted on successful drain; a lifecycle rule must
-  abort incomplete multipart uploads; failed files stay held with a reason and
-  are operator-deletable.
+  file contents; raw bytes are deleted on successful drain; the scheduled
+  raw-byte sweep (`src/lib/retention.ts`, A3) deletes anything no drain reached
+  once the 24 h retry window lapses and records a deletion receipt in `audit`; a
+  lifecycle rule must abort incomplete multipart uploads; failed files stay held
+  with a reason and are operator-deletable.
 - **Residual risk**: the window between upload and drain exposes raw bytes to
-  anyone with account-level R2 access, and to Cloudflare. A file that never
-  drains (no capable provider) retains its bytes indefinitely — **this is a
-  defect until a retention cap is implemented** (R6/FR-016/NFR-007).
+  anyone with account-level R2 access, and to Cloudflare. Bytes live at most one
+  retry window past the last upload or failed drain; deletion is automatic and
+  receipted, not operator-dependent.
 
 ### T4 — Secret exfiltration
 
@@ -168,16 +170,18 @@ bucket** until drained.
 A submitter-attached document transits the Worker into a private R2 key and
 stays there, **unencrypted**, until the lane extracts its text (success deletes
 it; failure keeps it for a bounded 24 h retry). This is the user-approved
-Principle I exception (ADR-0012, plan.md Complexity Tracking).
+Principle I exception (ADR-0012; the Complexity Tracking record is pre-split
+and not carried into this repository).
 
 - **Mitigations**: private bucket bound to one installation; the key is a
   random id; the raw is never sent to a text prompt or logged; the gate runs on
   extracted text before any storage; extracted text is testimony-only (never
   the corpus mirror); the raw is deleted on success and after the retry window.
 - **Residual risk**: Cloudflare and anyone with account-level R2 access can
-  read the bytes during the window; a file that repeatedly fails can sit for
-  one retry window at a time until an operator intervenes. The specification
-  deliberately does not claim an at-rest seal.
+  read the bytes during the window; a file that repeatedly fails sits for one
+  more retry window after the last failed drain, then the scheduled sweep
+  deletes it and receipts the deletion. The specification deliberately does not
+  claim an at-rest seal.
 
 ## 4. Documented limits (honest, not aspirational)
 

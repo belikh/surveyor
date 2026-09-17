@@ -51,22 +51,15 @@ function el(tag, attrs, ...children) {
   for (const c of children) n.append(c);
   return n;
 }
-function b64(bytes) {
-  let s = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-  }
-  return btoa(s);
-}
+// The file itself is the request body: it streams to the Worker and on to
+// R2, never a base64 JSON field (A15). The filename rides in a header (A11).
 async function uploadOne(filename, mediaType, blob) {
-  const buf = new Uint8Array(await blob.arrayBuffer());
   await api(
     "/api/corpus",
     {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ filename, content_type: mediaType, content_b64: b64(buf) }),
+      headers: { "content-type": mediaType, "x-filename": encodeURIComponent(filename) },
+      body: blob,
     },
   );
 }

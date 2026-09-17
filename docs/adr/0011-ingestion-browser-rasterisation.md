@@ -2,7 +2,7 @@
 
 **Status**: Accepted (2026-09-16, user decisions under grilling)
 
-**Deciders**: operator (user), remediation R6 (#29)
+**Deciders**: operator (user), remediation R6
 
 ## Context
 
@@ -51,6 +51,7 @@ images, HTML, and more) and a current vision-model catalogue.
 
 ## References
 
-- Remediation: R6 (#29); spec FR-009–FR-017
-- Research: `.scratch/cloudflare-native/research/corpus-ocr-pipeline.md`
+- Remediation: R6; spec FR-009–FR-017
+- Research: pre-split wayfinder corpus-OCR report (not carried into this
+  repository)
 - Related: ADR-0002 (ingestion), ADR-0012 (submitter files)

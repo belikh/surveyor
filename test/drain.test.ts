@@ -6,6 +6,20 @@ import {
   type HeldDoc,
 } from "../src/lib/drain";
 
+/** Corpus uploads stream (A15): the bytes are the body and the filename
+ *  rides in `x-filename` (A11), never a base64 JSON field. */
+function corpusHeaders(
+  filename: string,
+  mediaType: string,
+  token = "op-token",
+): Record<string, string> {
+  return {
+    authorization: `Bearer ${token}`,
+    "x-filename": encodeURIComponent(filename),
+    "content-type": mediaType,
+  };
+}
+
 function held(over: Partial<HeldDoc> = {}): HeldDoc {
   return {
     id: "d1",
@@ -93,12 +107,8 @@ describe("drain routes", () => {
 
     await callApp(env, "/api/corpus", {
       method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        filename: "scan.png",
-        content_type: "image/png",
-        content_b64: Buffer.from("fake").toString("base64"),
-      }),
+      headers: corpusHeaders("scan.png", "image/png"),
+      body: "fake",
     });
 
     // Raw bytes are held in R2, never D1.
@@ -164,12 +174,8 @@ describe("drain routes", () => {
     });
     await callApp(env, "/api/corpus", {
       method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        filename: "scan.png",
-        content_type: "image/png",
-        content_b64: Buffer.from("fake").toString("base64"),
-      }),
+      headers: corpusHeaders("scan.png", "image/png"),
+      body: "fake",
     });
 
     const { vi } = await import("vitest");
@@ -254,12 +260,8 @@ describe("keyless Workers AI lanes (R6)", () => {
     });
     await callApp("/api/corpus", {
       method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        filename: "scan.png",
-        content_type: "image/png",
-        content_b64: Buffer.from("scan").toString("base64"),
-      }),
+      headers: corpusHeaders("scan.png", "image/png"),
+      body: "scan",
     });
     const out = (await (
       await callApp("/api/corpus/drain", {
@@ -284,12 +286,8 @@ describe("keyless Workers AI lanes (R6)", () => {
     });
     await callApp("/api/corpus", {
       method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        filename: "contract.pdf",
-        content_type: "application/pdf",
-        content_b64: Buffer.from("%PDF-1.4").toString("base64"),
-      }),
+      headers: corpusHeaders("contract.pdf", "application/pdf"),
+      body: "%PDF-1.4",
     });
     const out = (await (
       await callApp("/api/corpus/drain", {
@@ -319,12 +317,8 @@ describe("keyless Workers AI lanes (R6)", () => {
     ]);
     await callApp("/api/corpus", {
       method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        filename: "scan.png",
-        content_type: "image/png",
-        content_b64: Buffer.from("scan").toString("base64"),
-      }),
+      headers: corpusHeaders("scan.png", "image/png"),
+      body: "scan",
     });
     const out = (await (
       await callApp("/api/corpus/drain", {
@@ -363,12 +357,8 @@ describe("keyless Workers AI lanes (R6)", () => {
     );
     await callApp("/api/corpus", {
       method: "POST",
-      headers: auth,
-      body: JSON.stringify({
-        filename: "scan.png",
-        content_type: "image/png",
-        content_b64: Buffer.from("scan").toString("base64"),
-      }),
+      headers: corpusHeaders("scan.png", "image/png"),
+      body: "scan",
     });
     const out = (await (
       await callApp("/api/corpus/drain", {

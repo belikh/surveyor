@@ -48,17 +48,17 @@ POW_DIFFICULTY = "16"
 # reads it from /api/status. Leave empty to keep the gate absent.
 TURNSTILE_SITEKEY = ""
 
-# Wizard OAuth consent (R2): public OAuth client id + endpoints. Leave the
-# client id empty to disable the flow. The client secret, when used, is a
-# secret (comment block below) and never reaches installation state.
+# Wizard OAuth consent (R2, ADR-0013): PKCE public client. Public client id
+# + endpoints; no client secret is embedded, sent, or stored. Leave the
+# client id empty to disable the flow.
 CF_OAUTH_CLIENT_ID = ""
 CF_OAUTH_AUTHORIZE_URL = ""
 CF_OAUTH_TOKEN_URL = ""
 CF_OAUTH_SCOPES = ""
 
 # Secrets (set by the operator's own hands, never in this file):
-#   SERVER_SECRET, ENCRYPTION_KEY, OPERATOR_TOKEN   (generated at provision)
+#   SERVER_SECRET, ENCRYPTION_KEY, OPERATOR_TOKEN   (boot panel or wrangler;
+#                                                    never generated hidden)
 #   GROQ_API_KEY, TOKENROUTER_API_KEY               (optional BYOK)
 #   TURNSTILE_SECRET                                (optional human-check)
-#   CF_OAUTH_CLIENT_SECRET                          (optional OAuth client)
 #   PUBLIC_BASE_URL                                 (optional origin override)

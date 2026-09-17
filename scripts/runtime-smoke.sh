@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Local-runtime verification: boot the worker in workerd (miniflare) with
-# every binding, run the smoke script against it, and report receipts.
-# No Cloudflare account required. Exits non-zero if any check fails.
+# Local-runtime verification in two phases, no Cloudflare account needed:
+#
+#   1. `wrangler dev` boots the built Worker with every binding and
+#      scripts/smoke.mjs audits the HTTP surface.
+#   2. scripts/runtime-primitives.mjs boots the same build in workerd and
+#      exercises the runtime primitives directly: queue delivery and retry,
+#      Workflow execution and persisted resume, and R2 range and delete
+#      behaviour. Failures name the primitive involved.
+#
+# Exits non-zero if any check fails.
 set -euo pipefail
 
 PORT="${PORT:-8788}"
@@ -47,3 +54,14 @@ for _ in $(seq 1 90); do
 done
 
 node scripts/smoke.mjs "http://127.0.0.1:$PORT" --token "$TOKEN"
+
+# Phase 2: miniflare ships inside wrangler, which npx has installed by now.
+# Resolve its entry from the wrangler binary on the npm-exec PATH so the
+# primitives script needs no new dependency in package.json.
+MINIFLARE_ENTRY="$(
+  npm_config_loglevel=error npm exec --yes --package=wrangler -- bash -c '
+    bin="$(readlink -f "$(command -v wrangler)")"
+    printf "%s/miniflare/dist/src/index.js" "$(dirname "$(dirname "$(dirname "$bin")")")"
+  '
+)"
+node scripts/runtime-primitives.mjs "$MINIFLARE_ENTRY"

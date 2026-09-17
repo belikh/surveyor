@@ -2,13 +2,13 @@
 
 **Status**: Accepted (implemented 2026-09-16; ratifies the wayfinder decision)
 
-**Deciders**: operator (user), via remediation R2 (#26)
+**Deciders**: operator (user), via remediation R2
 
 ## Context
 
-The wayfinder decision (`.scratch/cloudflare-native/issues/t01-tenant-byok.md`,
-Q10) ratified "AI SDK provider packages behind a registry interface". The
-inherited build silently contradicted it: `ai` and `@ai-sdk/openai-compatible`
+The wayfinder decision (`t01-tenant-byok`, Q10; pre-split, not carried into
+this repository) ratified "AI SDK provider packages behind a registry
+interface". The inherited build silently contradicted it: `ai` and `@ai-sdk/openai-compatible`
 were removed from `package.json` and `serve.ts` hand-rolled a `fetch` to
 `/chat/completions`. R2 required the decision be **implemented or amended by
 ADR** — not left contradicted. The operator chose implementation.
@@ -52,6 +52,7 @@ Implement the registry on the **Vercel AI SDK**: `ai@7` with
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t01-tenant-byok.md`
-- Remediation: R2 (#26)
+- Wayfinder ticket: `t01-tenant-byok` (pre-split; not carried into this
+  repository)
+- Remediation: R2
 - Tests: `surveyor/test/chain.test.ts`

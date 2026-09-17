@@ -29,19 +29,19 @@ async function callApp(
   );
 }
 
-function b64(s: string): string {
-  return Buffer.from(s, "utf8").toString("base64");
+function corpusHeaders(filename: string, mediaType: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${TOKEN}`,
+    "x-filename": encodeURIComponent(filename),
+    "content-type": mediaType,
+  };
 }
 
 async function seedCorpus(env: Record<string, unknown>) {
   await callApp(env, "/api/corpus", {
     method: "POST",
-    headers: auth,
-    body: JSON.stringify({
-      filename: "notes.txt",
-      content_type: "text/plain",
-      content_b64: b64("Rosters are posted late on Tuesdays and wreck sleep"),
-    }),
+    headers: corpusHeaders("notes.txt", "text/plain"),
+    body: "Rosters are posted late on Tuesdays and wreck sleep",
   });
 }
 

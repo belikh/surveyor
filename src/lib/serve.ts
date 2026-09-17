@@ -193,6 +193,11 @@ function baseFor(e: ChainEntry): string {
  * never logged or persisted). Falls through on transport errors, 429, and
  * 5xx; 4xx surfaces. `fetchImpl` is injectable so the chain can be tested
  * without network.
+ *
+ * The destination policy matches the save-time probe (src/lib/net.ts): a
+ * base URL must be https to a public host, and the transport refuses
+ * redirects. Only the first hop is checked against the policy, so following
+ * a redirect would carry the provider key to an unchecked destination.
  */
 export function buildChainClient(
   entries: ChainEntry[],
@@ -202,6 +207,11 @@ export function buildChainClient(
   const visionEntries = entries.filter((e) =>
     (e.capabilities ?? []).includes("vision"),
   );
+
+  // `redirect: "manual"` returns the 3xx to the SDK instead of following it;
+  // the hop that would have carried the key never happens.
+  const guardedFetch: typeof fetch = (input, init) =>
+    fetchImpl(input, { ...init, redirect: "manual" });
 
   async function run(
     pool: ChainEntry[],
@@ -230,7 +240,7 @@ export function buildChainClient(
         name: e.label,
         baseURL,
         apiKey: key,
-        fetch: fetchImpl,
+        fetch: guardedFetch,
       });
       try {
         const text = await invoke(provider, e);

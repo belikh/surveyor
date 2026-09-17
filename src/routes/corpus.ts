@@ -1,6 +1,8 @@
 // Corpus routes: operator-gated upload with lane classification, gate
-// verdicts, and per-file status. Text lands sealed in the mirror the same
-// request; model lanes (OCR/rescue) record honest held status.
+// verdicts, and per-file status. Uploads stream (A15): held lanes go into R2
+// through a counting, capping transform; the native text lane decodes from
+// the counted stream the same request. Model lanes (OCR/rescue) record
+// honest held status.
 
 import { Hono } from "hono";
 import type { Bindings } from "../env";
@@ -9,49 +11,109 @@ import { sealText, openText, nameHmac } from "../lib/vault";
 import { unwrap } from "../lib/evidence";
 import { recordTurn } from "../lib/telemetry";
 import {
-  UploadBodySchema,
   MAX_DOC_BYTES,
   classifyLane,
   gateCorpusText,
   statusFor,
 } from "../lib/ingest";
+import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
 
 export const corpus = new Hono<{ Bindings: Bindings }>();
 
-function decodeB64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+/** The filename travels percent-encoded in `x-filename`, never the request
+ *  line (A11); a malformed escape falls back to the raw value. Mirrors the
+ *  submitter-attachment transport (A14). */
+function decodeFilename(raw: string | undefined): string {
+  if (!raw) return "attachment";
+  try {
+    return decodeURIComponent(raw).slice(0, 256);
+  } catch {
+    return raw.slice(0, 256);
+  }
 }
 
 corpus.post("/", async (c) => {
   const app = await getState(c.env);
-  const parsed = UploadBodySchema.safeParse(await c.req.json());
-  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
-  const { filename, content_type, content_b64 } = parsed.data;
+  const filename = decodeFilename(c.req.header("x-filename"));
+  const mediaType = (
+    c.req.header("content-type") ?? "application/octet-stream"
+  ).slice(0, 128);
 
-  // Size gate BEFORE decode: base64 inflates ~4/3, so compare against the
-  // cap scaled up. Fails closed before any large allocation.
-  if (content_b64.length > (MAX_DOC_BYTES * 4) / 3 + 64) {
-    return c.json({ error: "rejected", detail: "size exceeds cap" }, 422);
+  // Lane by type before the body is touched: an unsupported type costs no
+  // transfer. The size checks re-run against the counted stream length below.
+  const typed = classifyLane(filename, mediaType, MAX_DOC_BYTES);
+  if (typed.lane === "rejected") {
+    return c.json({ error: "rejected", detail: typed.reason }, 422);
   }
-  let bytes: Uint8Array;
+  const body = c.req.raw.body;
+  if (!body) return c.json({ error: "invalid_body", detail: "empty body" }, 422);
+
+  const id = crypto.randomUUID();
+  const key = `corpus/${id}`;
+  const status = statusFor(typed.lane);
+  // Count and cap while forwarding (A14 idiom): held-lane bytes stream
+  // straight into R2 so a large scan never sits in isolate memory, and a
+  // chunked request gets an exact size from the stream itself. Native text
+  // must be decoded whole for the mirror, so its chunks are collected — only
+  // for that lane, and only up to the cap.
+  let size = 0;
+  let overCap = false;
+  const chunks: Uint8Array[] = [];
+  const counted = body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        size += chunk.byteLength;
+        if (size > MAX_DOC_BYTES) {
+          overCap = true;
+          controller.error(new Error("document exceeds the per-file cap"));
+          return;
+        }
+        if (status === "parsed") chunks.push(chunk);
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+
+  // Held bytes stream into R2 when the object store is bound; without it
+  // (local, tests) the stream is still counted so the cap holds. Parsed text
+  // is never retained raw.
+  let stored = false;
   try {
-    bytes = decodeB64(content_b64);
-  } catch {
-    return c.json({ error: "invalid_body", detail: "bad base64" }, 422);
+    if (status === "held" && c.env.CORPUS) {
+      await c.env.CORPUS.put(key, counted);
+      stored = true;
+    } else {
+      const reader = counted.getReader();
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    }
+  } catch (err) {
+    if (overCap) {
+      return c.json({ error: "rejected", detail: "size exceeds cap" }, 422);
+    }
+    throw err;
   }
-  const decision = classifyLane(filename, content_type, bytes.length);
+
+  // Authoritative classification on the counted length: empty and over-cap
+  // documents fail closed, and a cap breach never leaves bytes behind.
+  const decision = classifyLane(filename, mediaType, size);
   if (decision.lane === "rejected") {
+    if (stored) await c.env.CORPUS!.delete(key);
     return c.json({ error: "rejected", detail: decision.reason }, 422);
   }
 
   // Text extraction per lane. Only the native text lane decodes in-request;
   // every other lane records held status — the model pass (T5) drains them.
   let raw = "";
-  const status = statusFor(decision.lane);
-  if (decision.lane === "native") {
+  if (status === "parsed") {
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
     try {
       raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes);
     } catch {
@@ -62,7 +124,6 @@ corpus.post("/", async (c) => {
   // Verdict honesty: unexamined (held) content is pending, never clean.
   // Filenames are operator-supplied but may carry names — seal them.
   const gated = status === "held" ? { text: "", verdict: "pending" as const, names: [] as string[] } : gateCorpusText(raw);
-  const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const sealedNames = await Promise.all(
     gated.names.map(async (name, i) => ({
@@ -71,13 +132,10 @@ corpus.post("/", async (c) => {
       hmac: await nameHmac(app.kit, name),
     })),
   );
-  if (status === "held" && c.env.CORPUS) {
-    await c.env.CORPUS.put(`corpus/${id}`, bytes);
-    // Enqueue for the drain; absent binding (tests, local) is fine — the
-    // file is already durable and the operator can POST /drain.
-    if (c.env.INGEST) {
-      await c.env.INGEST.send({ doc_id: id, lane: decision.lane });
-    }
+  // Enqueue for the drain; absent binding (tests, local) is fine — the
+  // file is already durable and the operator can POST /drain.
+  if (stored && c.env.INGEST) {
+    await c.env.INGEST.send({ doc_id: id, lane: decision.lane });
   }
   await c.env.DB.batch([
     c.env.DB.prepare(
@@ -91,7 +149,7 @@ corpus.post("/", async (c) => {
       await sealText(app.kit, gated.text),
       // Held lanes keep their raw bytes in the corpus object store (R2)
       // so the model pass has input; parsed docs keep none.
-      status === "held" && c.env.CORPUS ? `corpus/${id}` : null,
+      stored ? key : null,
       decision.reason ?? null,
       now,
     ),
@@ -201,9 +259,17 @@ export async function drainDocById(
     ]);
     if (env.CORPUS) await env.CORPUS.delete(row.raw_key);
   } else {
+    // A failed drain restarts the bounded raw-bytes window; the retention
+    // sweep deletes the bytes if no later drain ever comes.
     await env.DB.prepare(
-      "UPDATE corpus_docs SET reason = ? WHERE id = ?",
-    ).bind(r.outcome.reason, row.id).run();
+      "UPDATE corpus_docs SET reason = ?, retry_after = ? WHERE id = ?",
+    )
+      .bind(
+        r.outcome.reason,
+        new Date(Date.now() + RAW_RETRY_WINDOW_MS).toISOString(),
+        row.id,
+      )
+      .run();
   }
   await recordTurn(env.DB, {
     tier: r.tier,

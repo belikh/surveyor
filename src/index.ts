@@ -12,6 +12,7 @@ import { wizardShell, WIZARD_JS } from "./frontend/chrome";
 import { surveyShell, SURVEY_JS } from "./frontend/survey";
 import { uploaderShell, UPLOADER_JS } from "./frontend/uploader";
 import PDF_TOOLS_JS from "../dist/pdf-tools.txt";
+import PDF_WORKER_JS from "../dist/pdf.worker.txt";
 import {
   resolveChain,
   validateCustomProvider,
@@ -26,11 +27,15 @@ import {
   DEFAULT_TOKEN_URL,
   DEFAULT_SCOPES,
   authorizeUrl,
+  codeChallengeS256,
   exchangeOAuthCode,
+  generateCodeVerifier,
   signState,
   verifyState,
   type OAuthConfig,
 } from "./lib/oauth";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { WorkflowEntrypoint } from "cloudflare:workers";
 import {
   provisionStack,
   teardownStack,
@@ -38,8 +43,17 @@ import {
   type ProvisionReceipt,
 } from "./lib/provision";
 import { createCloudflareApi } from "./lib/cfapi";
+import {
+  bootstrapInstallation,
+  BootstrapError,
+} from "./lib/bootstrap";
 import { liveClient, hasSecretValue } from "./lib/providers";
 import { isAllowedProviderBaseUrl } from "./lib/net";
+import {
+  CIPHERTEXT_AUDIT_COLUMNS,
+  uncoveredSealedColumns,
+} from "./lib/ciphertext";
+import SCHEMA_SQL from "./db/schema.sql";
 import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
@@ -48,6 +62,7 @@ import launch from "./routes/launch";
 import engine from "./routes/engine";
 import reports from "./routes/reports";
 import { evaluateAll } from "./lib/schedule";
+import { sweepRawBytes } from "./lib/retention";
 import { REQUIRED_SCOPES, REVOCATION_GUIDANCE } from "./lib/scopes";
 import type { Bindings, IngestMessage } from "./env";
 
@@ -86,11 +101,13 @@ app.notFound((c) => c.json({ error: "not_found" }, 404));
 app.onError((err, c) => {
   // Missing key material is a deployment state, not a bad request: say so
   // plainly and fail closed wherever sealed data would be read or written.
-  if (err instanceof InstallationUnprovisioned) {
+    if (err instanceof InstallationUnprovisioned) {
     return c.json(
       {
         error: "not_provisioned",
-        detail: "SERVER_SECRET / ENCRYPTION_KEY missing",
+        detail:
+          "SERVER_SECRET / ENCRYPTION_KEY missing — open the wizard and " +
+          "boot the installation",
       },
       503,
     );
@@ -151,6 +168,11 @@ app.get("/corpus.js", (c) =>
 );
 app.get("/pdf-tools.js", (c) =>
   c.body(PDF_TOOLS_JS, 200, { "content-type": "application/javascript" }),
+);
+// The PDF.js worker asset. `/pdf-tools.js` sets workerSrc to this route, so
+// the worker runs same-origin with no third-party fetch (ADR-0011).
+app.get("/pdf.worker.mjs", (c) =>
+  c.body(PDF_WORKER_JS, 200, { "content-type": "application/javascript" }),
 );
 
 app.route("/api/intake", intake);
@@ -254,6 +276,41 @@ app.get("/api/setup/token-guidance", (c) =>
   c.json({ scopes: REQUIRED_SCOPES, guidance: REVOCATION_GUIDANCE }),
 );
 
+// First-run bootstrap (A1). No operator token can exist yet, so this is
+// deliberately reachable while unprovisioned; it writes nothing without a
+// Cloudflare token that can already edit this Worker, and it refuses once
+// the master slots are set (rotation is never a side effect). The operator
+// chooses the operator token, the key material is minted in-flight, and the
+// receipt carries slot names and booleans only.
+const BootstrapBodySchema = z.object({
+  cf_token: z.string().min(1).max(4096),
+  account_id: z.string().min(1).max(64),
+  script_name: z.string().min(1).max(128),
+  operator_token: z.string().min(16).max(512).optional(),
+});
+
+app.post("/api/bootstrap", async (c) => {
+  const parsed = BootstrapBodySchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  try {
+    const receipt = await bootstrapInstallation(c.env, parsed.data);
+    return c.json({ ok: true, ...receipt });
+  } catch (err) {
+    if (err instanceof BootstrapError) {
+      return c.json(
+        { error: err.code, detail: err.message },
+        err.code === "already_provisioned" ? 409 : 422,
+      );
+    }
+    return c.json(
+      { error: "secret_write_failed", detail: (err as Error).message },
+      502,
+    );
+  }
+});
+
 // Secret presence: a slot counts as configured only when it is one of the
 // provider key slots AND its binding is set. Only truthiness is ever
 // inspected — values are never read, logged, or returned (constitution II).
@@ -287,8 +344,9 @@ app.get("/api/status", async (c) => {
         degraded: true,
         warning:
           "Not provisioned — SERVER_SECRET / ENCRYPTION_KEY missing. " +
-          "This installation cannot seal testimony until they are set.",
+          "Open the wizard to boot the installation.",
         provisioned: false,
+        operator_token_set: Boolean(c.env.OPERATOR_TOKEN),
       });
     }
     throw err;
@@ -300,11 +358,15 @@ app.get("/api/status", async (c) => {
     degraded: boolean;
     warning: string | null;
     provisioned: boolean;
+    operator_token_set: boolean;
     turnstile_sitekey?: string;
   } = {
     degraded,
     warning,
     provisioned: true,
+    // The write surfaces answer 404 while this is unset; the wizard must be
+    // able to see that honestly rather than discover it on first write.
+    operator_token_set: Boolean(c.env.OPERATOR_TOKEN),
   };
   if (c.env.TURNSTILE_SECRET && c.env.TURNSTILE_SITEKEY) {
     body.turnstile_sitekey = c.env.TURNSTILE_SITEKEY;
@@ -453,10 +515,16 @@ app.delete("/api/providers/key/:slot", async (c) => {
   return c.json({ ok: true, slot });
 });
 
-// OAuth consent (R2). The installation advertises whether it can run the
-// flow; the operator clicks "Connect Cloudflare", consents, and the
-// transient token returns to the wizard in the URL fragment (client-side
-// only). Nothing here stores the token.
+// OAuth consent (R2, ADR-0013). PKCE public client: the start redirect
+// carries an S256 challenge and a signed state; the verifier is held in an
+// HttpOnly cookie scoped to the callback path, so it never rides in a URL
+// and never reaches D1. The operator clicks "Connect Cloudflare", consents,
+// and the transient token returns to the wizard in the URL fragment
+// (client-side only). Nothing here stores the token or sends a client
+// secret.
+const OAUTH_VERIFIER_COOKIE = "surveyor_oauth_verifier";
+const OAUTH_VERIFIER_TTL_S = 10 * 60;
+
 function oauthConfig(env: Bindings, origin: string): OAuthConfig {
   return {
     clientId: env.CF_OAUTH_CLIENT_ID ?? "",
@@ -472,8 +540,20 @@ app.get("/api/oauth/start", async (c) => {
   const clientId = c.env.CF_OAUTH_CLIENT_ID;
   if (!clientId) return c.json({ error: "oauth_not_configured" }, 404);
   const origin = new URL(c.req.url).origin;
+  const verifier = generateCodeVerifier();
   const state = await signState(app.kit, Date.now());
-  return c.redirect(authorizeUrl(oauthConfig(c.env, origin), state), 302);
+  setCookie(c, OAUTH_VERIFIER_COOKIE, verifier, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/api/oauth",
+    maxAge: OAUTH_VERIFIER_TTL_S,
+  });
+  const challenge = await codeChallengeS256(verifier);
+  return c.redirect(
+    authorizeUrl(oauthConfig(c.env, origin), state, challenge),
+    302,
+  );
 });
 
 app.get("/api/oauth/callback", async (c) => {
@@ -482,7 +562,10 @@ app.get("/api/oauth/callback", async (c) => {
   if (!clientId) return c.json({ error: "oauth_not_configured" }, 404);
   const code = c.req.query("code");
   const state = c.req.query("state") ?? "";
+  const verifier = getCookie(c, OAUTH_VERIFIER_COOKIE) ?? "";
+  deleteCookie(c, OAUTH_VERIFIER_COOKIE, { path: "/api/oauth" });
   if (!code) return c.json({ error: "missing_code" }, 400);
+  if (!verifier) return c.json({ error: "missing_code_verifier" }, 400);
   if (!(await verifyState(app.kit, state, Date.now()))) {
     return c.json({ error: "bad_state" }, 400);
   }
@@ -490,8 +573,8 @@ app.get("/api/oauth/callback", async (c) => {
   try {
     const token = await exchangeOAuthCode(
       oauthConfig(c.env, origin),
-      c.env.CF_OAUTH_CLIENT_SECRET ?? "",
       code,
+      verifier,
     );
     // Fragment, not query: never sent to or logged by the server.
     return c.redirect(`/#cf_token=${encodeURIComponent(token)}`, 302);
@@ -596,14 +679,21 @@ app.post("/api/audit/reseal", async (c) => {
   return c.json({ ok: failed === 0, resealed, skipped, failed });
 });
 
-// At-rest storage audit (operator-only): envelope shapes only, never
-// values. Lets the smoke script prove ciphertext-only storage on a live
-// installation without decrypting anything.
+// At-rest storage audit (operator-only): every sealed column by the schema
+// conventions, envelope shapes only, never values. Lets the smoke script
+// prove ciphertext-only storage on a live installation without decrypting
+// anything. `missing` names sealed columns this receipt does not cover: a
+// non-empty list fails the audit rather than quietly under-reporting.
 app.get("/api/audit/ciphertext", async (c) => {
   const denied = await requireOperator(c);
   if (denied) return c.json(deny(denied), denied);
-  const collect = async (sql: string): Promise<{ total: number; malformed: number }> => {
-    const rows = await c.env.DB.prepare(sql).all<{ v: string | null }>();
+  const collect = async (
+    table: string,
+    column: string,
+  ): Promise<{ total: number; malformed: number }> => {
+    const rows = await c.env.DB.prepare(
+      `SELECT ${column} AS v FROM ${table}`,
+    ).all<{ v: string | null }>();
     const list = Array.isArray(rows) ? rows : rows.results;
     const values = list.map((r) => String(r.v ?? ""));
     const blob = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -612,18 +702,26 @@ app.get("/api/audit/ciphertext", async (c) => {
       malformed: values.filter((v) => !blob.test(v)).length,
     };
   };
-  const messages = await collect("SELECT body_envelope AS v FROM messages");
-  const corpus = await collect("SELECT text_envelope AS v FROM corpus_docs");
-  const entities = await collect("SELECT name_envelope AS v FROM entities");
-  const versions = await collect("SELECT body_envelope AS v FROM report_versions");
-  const malformed =
-    messages.malformed + corpus.malformed + entities.malformed + versions.malformed;
+  const columns: Record<string, { total: number; malformed: number }> = {};
+  let total = 0;
+  let malformed = 0;
+  for (const { table, column } of CIPHERTEXT_AUDIT_COLUMNS) {
+    const counts = await collect(table, column);
+    columns[`${table}.${column}`] = counts;
+    total += counts.total;
+    malformed += counts.malformed;
+  }
+  const missing = uncoveredSealedColumns(
+    SCHEMA_SQL,
+    CIPHERTEXT_AUDIT_COLUMNS,
+  ).map((c) => `${c.table}.${c.column}`);
   return c.json({
-    ok: malformed === 0,
-    messages,
-    corpus,
-    entities,
-    report_versions: versions,
+    ok: malformed === 0 && missing.length === 0,
+    total,
+    malformed,
+    inspected: CIPHERTEXT_AUDIT_COLUMNS.map((c) => `${c.table}.${c.column}`),
+    missing,
+    columns,
   });
 });
 
@@ -693,14 +791,16 @@ const ProvisionBodySchema = CfCredsSchema.extend({
 
 // Secrets the runtime provisioner installs. Generated slots are minted
 // in-flight; operator-supplied slots are presence-checked only.
+// OPERATOR_TOKEN is always operator-supplied: the provisioner requires it
+// to run, and minting a replacement it never reveals would lock the
+// operator out (the bootstrap screen owns the fresh-install choice).
 const PROVISION_SECRETS = [
   { slot: "SERVER_SECRET", generate: true },
   { slot: "ENCRYPTION_KEY", generate: true },
-  { slot: "OPERATOR_TOKEN", generate: true },
+  { slot: "OPERATOR_TOKEN", generate: false },
   { slot: "GROQ_API_KEY", generate: false },
   { slot: "TOKENROUTER_API_KEY", generate: false },
   { slot: "TURNSTILE_SECRET", generate: false },
-  { slot: "CF_OAUTH_CLIENT_SECRET", generate: false },
 ];
 
 // Runtime provision (R3): the operator consents through OAuth, then the
@@ -800,23 +900,6 @@ app.post("/api/teardown", async (c) => {
   );
 });
 
-/** WorkflowEntrypoint is a workerd global; the types package only
- *  declares it. Resolve the runtime class from globalThis with an inert
- *  fallback so Node-based tests can import this module. */
-type WorkflowBaseCtor = new (
-  ctx: ExecutionContext,
-  env: Bindings,
-) => CloudflareWorkersModule.WorkflowEntrypoint<Bindings>;
-const WorkflowBaseClass = ((
-  globalThis as unknown as { WorkflowEntrypoint?: WorkflowBaseCtor }
-).WorkflowEntrypoint ??
-  class {
-    protected env!: Bindings;
-    constructor(_ctx: ExecutionContext, env: Bindings) {
-      this.env = env;
-    }
-  }) as unknown as WorkflowBaseCtor;
-
 export interface EngineParams {
   line_id?: string;
   angle_id?: string;
@@ -824,8 +907,13 @@ export interface EngineParams {
 
 /** Staged pipeline entrypoint: research-line bookkeeping and scheduled
  *  digests. Extraction/serving stays with the HTTP paths so steps remain
- *  resumable without duplicating provider calls. */
-export class EngineWorkflow extends WorkflowBaseClass {
+ *  resumable without duplicating provider calls.
+ *
+ *  The base class must be the runtime's own `WorkflowEntrypoint` (from
+ *  `cloudflare:workers`), not a look-alike: workerd addresses this class as
+ *  the workflow's named entrypoint, and an inert fallback would refuse to
+ *  run ("not an actor") the moment an instance is created. */
+export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
   async run(
     event: CloudflareWorkersModule.WorkflowEvent<EngineParams>,
     step: CloudflareWorkersModule.WorkflowStep,
@@ -854,7 +942,10 @@ export class EngineWorkflow extends WorkflowBaseClass {
 
 export default {
   fetch: app.fetch,
-  // Cron trigger: scheduled digests evaluate on the platform clock.
+  // Cron trigger: scheduled digests evaluate on the platform clock, and the
+  // raw-byte retention sweep enforces the deletion window for held bytes
+  // that no drain reached. The sweep runs first so expired raw material is
+  // gone before any render reads the mirror.
   async scheduled(
     _event: ScheduledEvent,
     env: Bindings,
@@ -862,7 +953,9 @@ export default {
   ): Promise<void> {
     const st = await getState(env);
     const client = await liveClient(env.DB, env);
-    await evaluateAll(env.DB, st.kit, new Date().toISOString(), client);
+    const nowIso = new Date().toISOString();
+    await sweepRawBytes(env, nowIso);
+    await evaluateAll(env.DB, st.kit, nowIso, client);
   },
   // Queue consumer: held corpus docs enqueue here and drain through their
   // lane handler. Failures retry; files stay held with a reason when no

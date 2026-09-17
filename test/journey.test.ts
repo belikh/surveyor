@@ -41,8 +41,12 @@ async function callApp(
   );
 }
 
-function b64(s: string): string {
-  return Buffer.from(s, "utf8").toString("base64");
+function corpusHeaders(filename: string, mediaType: string): Record<string, string> {
+  return {
+    authorization: `Bearer ${TOKEN}`,
+    "x-filename": encodeURIComponent(filename),
+    "content-type": mediaType,
+  };
 }
 
 function fakeCloudflare(): CloudflareApi {
@@ -151,24 +155,16 @@ describe("full journey", () => {
     const up = (await (
       await callApp(env, "/api/corpus", {
         method: "POST",
-        headers: auth,
-        body: JSON.stringify({
-          filename: "notes.txt",
-          content_type: "text/plain",
-          content_b64: b64("Rosters run late on Tuesdays"),
-        }),
+        headers: corpusHeaders("notes.txt", "text/plain"),
+        body: "Rosters run late on Tuesdays",
       })
     ).json()) as Record<string, string>;
     expect(up.status).toBe("parsed");
     const held = (await (
       await callApp(env, "/api/corpus", {
         method: "POST",
-        headers: auth,
-        body: JSON.stringify({
-          filename: "scan.png",
-          content_type: "image/png",
-          content_b64: b64("fakepng"),
-        }),
+        headers: corpusHeaders("scan.png", "image/png"),
+        body: "fakepng",
       })
     ).json()) as Record<string, string>;
     expect(held.status).toBe("held");

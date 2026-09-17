@@ -12,8 +12,8 @@ demand is not live. The configuration surface must expose output types, publish
 gates, update frequency, and rewrite depth without letting an operator
 accidentally publish poisoned material.
 
-Primary sources: `.scratch/cloudflare-native/issues/t05-report-gates.md`
-(operator decisions, 2026-09-14).
+Primary source: the pre-split wayfinder ticket `t05-report-gates` (operator
+decisions, 2026-09-14; not carried into this repository).
 
 ## Decision
 
@@ -23,8 +23,10 @@ long-form, evidence dossier (claim → exhibits), timeline, data snapshot.
 **Manual approval gates publication by default.** Automatic gates (submission
 count, elapsed time, evidence thresholds) are **opt-in and combinable**; a
 report publishes on manual approval **or** when all enabled automatic gates are
-satisfied. Gate configuration is stored with the report — never accepted in the
-publish call itself — so a publish can never self-authorise.
+satisfied. (Amended by ADR-0015: publication is always an operator act; stored
+gates become advisory checks recorded with the publish action.) Gate
+configuration is stored with the report — never accepted in the publish call
+itself — so a publish can never self-authorise.
 
 **Four update frequencies per report**: manual push, scheduled digest
 (**default**), per-N-submissions, and full-dynamic-after-every-submission. The
@@ -56,10 +58,15 @@ published reader's words never change silently.
   the poisoning gate, not eliminated.
 - The two-tier split adds a routing dependency on the significance judge; a
   judge outage degrades to the corroboration tick, never to a full pass.
-- A model-written "journalist pass" is the spec's ambition, not yet delivered;
-  deterministic templates currently stand in for it (see R7, #30).
+- A model-written "journalist pass" was the spec's ambition and was not
+  delivered at this ADR's date; ADR-0010 delivered it. The pass still runs
+  inline without a per-pass cap and falls back to the deterministic render
+  rather than Workers AI (B12, #30).
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t05-report-gates.md`
-- Remediation against the current build: R7 (#30)
+- Wayfinder ticket: `t05-report-gates` (pre-split; not carried into this
+  repository)
+- Remediation against the current build: R7
+- Superseded in part by: ADR-0010 (journalist pass), ADR-0015 (automation
+  stance)
