@@ -202,7 +202,14 @@ and not carried into this repository).
 
 ## 5. Open unknowns (need a live trial)
 
-- OCR accuracy on poor scans (bake-off) and the PDF page-to-image render step.
+- OCR accuracy on poor scans. The deterministic lanes are measured and
+  published (`evidence/ocr-accuracy/`, D8 #51): the native parsers and the
+  PDF.js text layer reproduce the fixture corpus exactly within their
+  supported subset, and an LZW-filtered PDF exercises the model fallback.
+  Vision OCR and `env.AI.toMarkdown` accuracy on scans still need a live
+  Workers AI run — the evidence records that as an explicit gap, not a
+  number. The PDF page-to-image render step is resolved by ADR-0011
+  (browser rasterisation).
 - Exact minimal scoped-token permission set and deploy-button D1-migration
   reliability.
 - Workers AI per-request image/token ceiling.

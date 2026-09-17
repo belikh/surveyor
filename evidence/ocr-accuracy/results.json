@@ -1,0 +1,402 @@
+{
+  "bakeoff": "ocr-accuracy",
+  "version": 1,
+  "reproduce": "npm run bakeoff:ocr",
+  "corpus": [
+    {
+      "id": "pdf-plain",
+      "lane": "held-pdf",
+      "format": "PDF",
+      "stresses": "one-line digital text layer",
+      "expect": "text",
+      "ground_truth": "Personnel roster for the Wynnum site",
+      "applies": [
+        "native-pdf",
+        "pdfjs-text"
+      ],
+      "bytes": 487,
+      "sha256": "7a1c41f3fa32fd6cb4f00a08aa283c78315749576c434902552e0245bc32ef7c"
+    },
+    {
+      "id": "pdf-multipage",
+      "lane": "held-pdf",
+      "format": "PDF",
+      "stresses": "page order and punctuation across three pages",
+      "expect": "text",
+      "ground_truth": "Wynnum roster - day shift Wynnum roster - night shift Reviewed by the delegate 14/03/2026",
+      "applies": [
+        "native-pdf",
+        "pdfjs-text"
+      ],
+      "bytes": 964,
+      "sha256": "239063898c562eefffea5fb0cebf8102438ba2a96b3479f0e4c70fc20d26d124"
+    },
+    {
+      "id": "pdf-cmap",
+      "lane": "held-pdf",
+      "format": "PDF",
+      "stresses": "Type0 font decoded only through a ToUnicode CMap (non-ASCII)",
+      "expect": "text",
+      "ground_truth": "Café roster (Site 3)",
+      "applies": [
+        "native-pdf",
+        "pdfjs-text"
+      ],
+      "bytes": 1512,
+      "sha256": "64a990983d75c47a5988abecdf88733faecfa392e4f828febdd000ba8ff1db9f"
+    },
+    {
+      "id": "pdf-scanlike",
+      "lane": "held-pdf",
+      "format": "PDF",
+      "stresses": "no text layer: vector content only, the vision-OCR case",
+      "expect": "empty-layer",
+      "ground_truth": "",
+      "applies": [
+        "native-pdf",
+        "pdfjs-text"
+      ],
+      "bytes": 300,
+      "sha256": "78690ba8ae7443179cf894c5ce7ab3d1bb7f1ad47394c8ddc910dffaf020311a"
+    },
+    {
+      "id": "pdf-lzw",
+      "lane": "held-pdf",
+      "format": "PDF",
+      "stresses": "LZW-filtered content stream: outside the native parser's filter set, so it must fall back to the model lane; PDF.js reads it",
+      "expect": "text",
+      "ground_truth": "LZW encoded delegate brief",
+      "applies": [
+        "native-pdf",
+        "pdfjs-text"
+      ],
+      "bytes": 472,
+      "sha256": "30866747716936bddec1f12210ab26f2159e59aff9bdbcfd06be9af7a7e443b5"
+    },
+    {
+      "id": "docx-paragraphs",
+      "lane": "held-docx",
+      "format": "DOCX",
+      "stresses": "paragraphs plus a table (pipe-joined cells)",
+      "expect": "text",
+      "ground_truth": "Site roster Reviewed by the delegate Wynnum Wharf | Delegate Night shift | 14/03/2026",
+      "applies": [
+        "native-docx"
+      ],
+      "bytes": 834,
+      "sha256": "53b51eb3ea7a415e67491afcd8c4575ebc47d0966164edd06efaf6d73c3879e7"
+    },
+    {
+      "id": "docx-inline",
+      "lane": "held-docx",
+      "format": "DOCX",
+      "stresses": "tabs and line breaks inside one run",
+      "expect": "text",
+      "ground_truth": "A B C",
+      "applies": [
+        "native-docx"
+      ],
+      "bytes": 258,
+      "sha256": "a50a5c5731c7326618c6b7d4c2dc909b7cb05ee2a86b6fc8199daf738d5f38c5"
+    },
+    {
+      "id": "xlsx-sheet",
+      "lane": "held-xlsx",
+      "format": "XLSX",
+      "stresses": "two sheets, shared and inline strings, numbers",
+      "expect": "text",
+      "ground_truth": "# Sheet: Roster Site | Delegate Wynnum Wharf | Night shift Headcount | 42 # Sheet: Totals Total | 45",
+      "applies": [
+        "native-xlsx"
+      ],
+      "bytes": 2245,
+      "sha256": "42a65c4b5cba74ea86d29cb5b157ed33fbdec925793f24144ec3f967c491335a"
+    },
+    {
+      "id": "pptx-slides",
+      "lane": "held-pptx",
+      "format": "PPTX",
+      "stresses": "titles, bullets and a table across two slides",
+      "expect": "text",
+      "ground_truth": "# Slide 1 Evidence timeline Call 09:15 Site visit 11:00 Date | Event 14/03/2026 | Delegate meeting # Slide 2 Next steps Interview scheduled",
+      "applies": [
+        "native-pptx"
+      ],
+      "bytes": 1173,
+      "sha256": "ed62a9039d096e87d7615911331b1bfc9a687f8b44bf92691b44da1fc30023ea"
+    }
+  ],
+  "paths": [
+    {
+      "id": "native-pdf",
+      "what": "dependency-free native PDF parser through the lane dispatch (src/lib/pdf.ts)",
+      "kind": "deterministic"
+    },
+    {
+      "id": "native-docx",
+      "what": "dependency-free native DOCX parser (src/lib/ooxml.ts)",
+      "kind": "deterministic"
+    },
+    {
+      "id": "native-xlsx",
+      "what": "dependency-free native XLSX parser (src/lib/ooxml.ts)",
+      "kind": "deterministic"
+    },
+    {
+      "id": "native-pptx",
+      "what": "dependency-free native PPTX parser (src/lib/ooxml.ts)",
+      "kind": "deterministic"
+    },
+    {
+      "id": "pdfjs-text",
+      "what": "PDF.js text layer (the browser lane's library and version, run in-process mirroring src/frontend/pdf-tools-entry.ts; not a browser run)",
+      "kind": "deterministic"
+    }
+  ],
+  "measurements": [
+    {
+      "fixture": "pdf-plain",
+      "path": "native-pdf",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 36,
+      "words_out": 6,
+      "error": null
+    },
+    {
+      "fixture": "pdf-plain",
+      "path": "pdfjs-text",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 36,
+      "words_out": 6,
+      "error": null
+    },
+    {
+      "fixture": "pdf-multipage",
+      "path": "native-pdf",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 89,
+      "words_out": 15,
+      "error": null
+    },
+    {
+      "fixture": "pdf-multipage",
+      "path": "pdfjs-text",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 91,
+      "words_out": 15,
+      "error": null
+    },
+    {
+      "fixture": "pdf-cmap",
+      "path": "native-pdf",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 20,
+      "words_out": 4,
+      "error": null
+    },
+    {
+      "fixture": "pdf-cmap",
+      "path": "pdfjs-text",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 20,
+      "words_out": 4,
+      "error": null
+    },
+    {
+      "fixture": "pdf-scanlike",
+      "path": "native-pdf",
+      "lane": "held-pdf",
+      "expected": "empty-layer",
+      "outcome": "empty",
+      "exact": true,
+      "char_accuracy": null,
+      "word_accuracy": null,
+      "chars_out": 0,
+      "words_out": 0,
+      "error": null
+    },
+    {
+      "fixture": "pdf-scanlike",
+      "path": "pdfjs-text",
+      "lane": "held-pdf",
+      "expected": "empty-layer",
+      "outcome": "empty",
+      "exact": true,
+      "char_accuracy": null,
+      "word_accuracy": null,
+      "chars_out": 0,
+      "words_out": 0,
+      "error": null
+    },
+    {
+      "fixture": "pdf-lzw",
+      "path": "native-pdf",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "empty",
+      "exact": false,
+      "char_accuracy": 0,
+      "word_accuracy": 0,
+      "chars_out": 0,
+      "words_out": 0,
+      "error": null
+    },
+    {
+      "fixture": "pdf-lzw",
+      "path": "pdfjs-text",
+      "lane": "held-pdf",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 26,
+      "words_out": 4,
+      "error": null
+    },
+    {
+      "fixture": "docx-paragraphs",
+      "path": "native-docx",
+      "lane": "held-docx",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 85,
+      "words_out": 14,
+      "error": null
+    },
+    {
+      "fixture": "docx-inline",
+      "path": "native-docx",
+      "lane": "held-docx",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 5,
+      "words_out": 3,
+      "error": null
+    },
+    {
+      "fixture": "xlsx-sheet",
+      "path": "native-xlsx",
+      "lane": "held-xlsx",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 100,
+      "words_out": 20,
+      "error": null
+    },
+    {
+      "fixture": "pptx-slides",
+      "path": "native-pptx",
+      "lane": "held-pptx",
+      "expected": "text",
+      "outcome": "text",
+      "exact": true,
+      "char_accuracy": 1,
+      "word_accuracy": 1,
+      "chars_out": 140,
+      "words_out": 24,
+      "error": null
+    }
+  ],
+  "summary": [
+    {
+      "path": "native-pdf",
+      "fixtures": 5,
+      "exact": 4,
+      "mean_char_accuracy": 0.75,
+      "mean_word_accuracy": 0.75
+    },
+    {
+      "path": "native-docx",
+      "fixtures": 2,
+      "exact": 2,
+      "mean_char_accuracy": 1,
+      "mean_word_accuracy": 1
+    },
+    {
+      "path": "native-xlsx",
+      "fixtures": 1,
+      "exact": 1,
+      "mean_char_accuracy": 1,
+      "mean_word_accuracy": 1
+    },
+    {
+      "path": "native-pptx",
+      "fixtures": 1,
+      "exact": 1,
+      "mean_char_accuracy": 1,
+      "mean_word_accuracy": 1
+    },
+    {
+      "path": "pdfjs-text",
+      "fixtures": 5,
+      "exact": 5,
+      "mean_char_accuracy": 1,
+      "mean_word_accuracy": 1
+    }
+  ],
+  "gaps": [
+    {
+      "path": "workers-ai-toMarkdown",
+      "what": "env.AI.toMarkdown document-conversion fallback in the drain lane (src/lib/drain.ts)",
+      "reason": "requires a live Workers AI binding on a deployed Cloudflare account, which this environment does not have",
+      "fixtures": [
+        "any format the native lanes cannot parse (office variants, form XObjects, model-only containers)"
+      ],
+      "measured": false
+    },
+    {
+      "path": "workers-ai-vision-ocr",
+      "what": "vision-model OCR over browser-rasterised scan pages (ADR-0011)",
+      "reason": "requires a live Workers AI account and a browser rasterisation run; neither is available in this environment",
+      "fixtures": [
+        "pdf-scanlike"
+      ],
+      "measured": false
+    }
+  ],
+  "run_at": "2026-09-17T05:37:43.335Z",
+  "environment": {
+    "node": "v24.19.0",
+    "platform": "linux-x64"
+  }
+}

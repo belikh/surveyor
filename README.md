@@ -17,7 +17,9 @@ every recipient, and recorded receipts document the disclosure honestly
   Third-party names live only in an encrypted quarantine.
 - **Corpus ingestion** — upload PDFs, office documents, and scans. Text
   parses immediately; everything else waits in held lanes for the model
-  pass, gated before it reaches any mirror.
+  pass, gated before it reaches any mirror. Native parsing accuracy is
+  [measured and published](evidence/ocr-accuracy/); the model-pass lanes on
+  scans remain a recorded gap there, not a claim.
 - **Grounded research** — angles proposed against your corpus with cited
   exhibits, capped research lines, and a bounded significance judge.
 - **Living reports** — five report types, manual-first publish gates,
