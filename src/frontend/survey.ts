@@ -16,6 +16,9 @@ body { background: var(--bg); color: var(--ink); font-family: system-ui, -apple-
 .svy .code { font-family: monospace; font-size: 22px; letter-spacing: 2px; }
 .svy .warn { color: var(--muted); font-size: 13px; }
 .svy .q { margin: 14px 0; }
+/* Sensitive-category consent: one line per category. The labels are inline
+   by default and ran together into a wall of text on the source's screen. */
+.svy .consent label { display: block; margin: 10px 0; }
 .svy .thread { margin: 14px 0; }
 .svy .msg { border-left: 3px solid var(--line); margin: 8px 0; padding: 4px 10px; white-space: pre-wrap; }
 @media (prefers-color-scheme: dark) { :root { --bg: #141414; --ink: #efefef; --muted: #aaa; --line: #333; } .svy .consent { background: #1c1c1c; } }

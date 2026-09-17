@@ -53,6 +53,7 @@ body.console { display: block; min-height: 100vh; }
 .console .os9-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
 .console .os9-danger { color: var(--danger); }
 .console .os9-muted { color: var(--accent); }
+.console .warn { color: #555; }
 .console details > summary { cursor: pointer; font-weight: 700; margin: 6px 0; }
 `;
 

@@ -624,7 +624,9 @@ async function paintSubmissionDetail(body, id) {
         render();
       } catch (e) { replyNote.textContent = "Failed: " + errorText(e); }
     });
-    body.append(panel(strong("Reply"), reply, el("div", { class: "os9-row" }, send), replyNote));
+    body.append(panel(strong("Reply"),
+      el("div", { class: "os9-field" }, reply),
+      el("div", { class: "os9-row" }, send), replyNote));
 
     body.append(panel(strong("Attachments"),
       data.attachments.length === 0 ? warn("No attachments.")
@@ -1246,7 +1248,8 @@ async function paintCase(body) {
         : el("div", {}, ...d.notes.map((n) => el("div", { class: "os9-msg", text: n.body })))));
     const note = el("textarea", { rows: 3, placeholder: "Add an operator note" });
     const noteMsg = warn("");
-    body.append(panel(strong("Note editor"), note,
+    body.append(panel(strong("Note editor"),
+      el("div", { class: "os9-field" }, note),
       el("div", { class: "os9-row" },
         btn("Add note", async () => {
           if (!note.value.trim()) { noteMsg.textContent = "Write something first."; return; }
