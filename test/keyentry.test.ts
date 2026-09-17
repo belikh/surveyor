@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { Script } from "node:vm";
 import app from "../src/index";
+import { entriesForCapability } from "../src/lib/registry";
 import { FakeD1 } from "./helpers/d1";
 
 const TOKEN = "op-token";
@@ -117,6 +119,69 @@ describe("BYOK key entry (R2)", () => {
     expect(dump).not.toContain("sk-live-secret-xyz");
     expect(dump).not.toContain("cf-secret-token");
     expect(dump).toContain("GROQ_API_KEY");
+  });
+
+  it("records capability tags with the key so the entry routes at once", async () => {
+    stubCloudflare();
+    const env = makeEnv();
+    const res = await callApp(env, "/api/providers/key", {
+      method: "POST",
+      headers: auth,
+      body: entryBody({ capabilities: ["vision"] }),
+    });
+    expect(res.status).toBe(200);
+    const providers = (await providersInState(env)) as Array<
+      Record<string, unknown>
+    >;
+    expect(providers[0].capabilities).toEqual(["vision"]);
+    // The tag is live without a second pass: the vision lane sees it, the
+    // search lane does not.
+    expect(
+      entriesForCapability(
+        providers as Array<{ capabilities?: string[]; label?: string }>,
+        "vision",
+      ).map((e) => e.label),
+    ).toEqual(["c"]);
+    expect(
+      entriesForCapability(
+        providers as Array<{ capabilities?: string[]; label?: string }>,
+        "search",
+      ),
+    ).toEqual([]);
+  });
+
+  it("keeps a search-tagged entry out of the chat chain", async () => {
+    stubCloudflare();
+    const env = makeEnv();
+    await callApp(env, "/api/providers/key", {
+      method: "POST",
+      headers: auth,
+      body: entryBody({ capabilities: ["search"] }),
+    });
+    const providers = (await providersInState(env)) as Array<
+      Record<string, unknown>
+    >;
+    expect(
+      entriesForCapability(
+        providers as Array<{ capabilities?: string[]; label?: string }>,
+        "chat",
+      ),
+    ).toEqual([]);
+    expect(
+      entriesForCapability(
+        providers as Array<{ capabilities?: string[]; label?: string }>,
+        "search",
+      ).map((e) => e.label),
+    ).toEqual(["c"]);
+  });
+
+  it("wires capability capture into the wizard's key entry", async () => {
+    const env = makeEnv();
+    const res = await callApp(env, "/wizard.js");
+    expect(res.status).toBe(200);
+    const js = await res.text();
+    expect(() => new Script(js)).not.toThrow();
+    expect(js).toContain("capabilities");
   });
 
   it("rotates in place when the same slot is written again", async () => {

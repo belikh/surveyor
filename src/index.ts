@@ -486,6 +486,9 @@ const KeyEntrySchema = z.object({
     .refine(isAllowedProviderBaseUrl, "base URL must be https to a public host")
     .optional(),
   secret_slot: z.string().regex(SECRET_SLOT).refine(isProviderSlot, "not a provider key slot"),
+  /** Declared abilities captured with the key (ADR-0018): chat, vision,
+   *  search, extract, audio. Entries without a tag are chat entries. */
+  capabilities: z.array(z.string().min(1).max(32)).max(8).optional(),
   api_key: z.string().min(1).max(512),
 });
 
@@ -533,6 +536,9 @@ app.post("/api/providers/key", async (c) => {
     secret_slot: p.secret_slot,
     model: p.model,
     ...(p.kind === "openai-compatible" ? { base_url: p.base_url } : {}),
+    ...(p.capabilities && p.capabilities.length > 0
+      ? { capabilities: p.capabilities }
+      : {}),
   };
   const providers = [
     ...current.providers.filter((x) => x.secret_slot !== p.secret_slot),
