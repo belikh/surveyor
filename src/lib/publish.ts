@@ -20,6 +20,7 @@ import {
 } from "./pass";
 import { recordTurn } from "./telemetry";
 import { LegalGateUnmet, legalGateStatus, pendingVersion } from "./legal";
+import { RecordingGateUnmet, recordingGateStatus } from "./recordings";
 import type { ModelClient } from "./serve";
 
 export type ReportType =
@@ -116,13 +117,18 @@ export async function publishReportVersion(
   const verdict = evaluateGates(row.config, evidence);
   if (!verdict.ok) throw new GatesUnmet(verdict.unmet);
 
+  const release = pendingVersion(row.current_version);
+
+  // Recording gate (C8): a jurisdiction-sensitive recording cited by this
+  // release needs its own legal review, recorded against this version.
+  const recording = await recordingGateStatus(db, evidence, type, release);
+  if (!recording.ok) {
+    throw new RecordingGateUnmet(recording.unmet, recording.doc_ids);
+  }
+
   // Legal gate: the release step is a human record tied to the version it
   // releases. A record for an earlier version never passes this one.
-  const legal = await legalGateStatus(
-    db,
-    type,
-    pendingVersion(row.current_version),
-  );
+  const legal = await legalGateStatus(db, type, release);
   if (!legal.ok) throw new LegalGateUnmet(legal.unmet);
 
   const deterministic = RENDERERS[type](evidence);

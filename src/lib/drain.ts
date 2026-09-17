@@ -8,6 +8,7 @@ import { gateCorpusText } from "./ingest";
 import type { QuarantineHit } from "./intake";
 import { extractNativeText } from "./native";
 import type { ModelClient } from "./serve";
+import { transcribeMedia, type TranscribeOutcome } from "./transcribe";
 
 export interface HeldDoc {
   id: string;
@@ -21,7 +22,7 @@ export interface HeldDoc {
 export interface DrainStep {
   id: string;
   lane: string;
-  handler: "document" | "vision" | "slides" | "sheets";
+  handler: "document" | "vision" | "slides" | "sheets" | "transcribe";
 }
 
 const CAPABILITY: Record<DrainStep["handler"], string> = {
@@ -29,6 +30,7 @@ const CAPABILITY: Record<DrainStep["handler"], string> = {
   vision: "image OCR (vision)",
   slides: "slide text extraction",
   sheets: "spreadsheet text extraction",
+  transcribe: "audio transcription",
 };
 
 const LANE_HANDLERS: Record<string, DrainStep["handler"] | undefined> = {
@@ -36,7 +38,11 @@ const LANE_HANDLERS: Record<string, DrainStep["handler"] | undefined> = {
   "held-docx": "document",
   "held-xlsx": "sheets",
   "held-pptx": "slides",
+  "held-email": "document",
+  "held-archive": "document",
   "held-ocr": "vision",
+  "held-audio": "transcribe",
+  "held-video": "transcribe",
 };
 
 /** Determine the drain order: held docs only, each with its handler. */
@@ -48,12 +54,17 @@ export function drainPlan(docs: HeldDoc[]): DrainStep[] {
 }
 
 export type LaneResult =
-  | { ok: true; text: string; tier: string; status?: "parsed" | "OCRed" | "rescued" }
+  | {
+      ok: true;
+      text: string;
+      tier: string;
+      status?: "parsed" | "OCRed" | "rescued" | "transcribed";
+    }
   | { ok: false; reason: string; tier: string };
 
 export interface DrainOutcome {
   id: string;
-  status: "parsed" | "OCRed" | "rescued" | "held";
+  status: "parsed" | "OCRed" | "rescued" | "transcribed" | "held";
   verdict: "clean" | "gated" | "pending";
   reason: string | null;
   text: string;
@@ -120,6 +131,9 @@ export interface DrainProviders {
   ai?: AiBinding;
   /** Registry chain restricted to vision-capable entries, when configured. */
   visionClient?: ModelClient | null;
+  /** Registry chain restricted to audio-capable entries: the transcription
+   *  rescue lane, spent only when the keyless default cannot read a file. */
+  audioClient?: ModelClient | null;
 }
 
 const OCR_MODEL = "@cf/moondream/moondream3.1-9B-A2B";
@@ -320,10 +334,110 @@ export function buildDrainHandlers(providers: DrainProviders): DrainHandler[] {
     },
   };
 
+  // Audio/video: the keyless Workers AI transcription is the default path
+  // (there is no native audio parser and no server-side demux); when it
+  // fails, an audio-tagged registry entry is the rescue lane. Both paths
+  // run the same chunk plan and per-file cap, so over-cap media is held
+  // before any provider is spent. With neither configured the file stays
+  // held with the missing capability named.
+  const audioClient = providers.audioClient;
+  const rescue = audioClient?.transcribe
+    ? {
+        tier: audioClient.tier,
+        model: audioClient.audioModel ?? "registry-audio",
+        run: (audioBase64: string) => audioClient.transcribe!(audioBase64),
+      }
+    : null;
+
+  const transcribeLane: DrainHandler = {
+    handler: "transcribe",
+    tier: providers.ai?.run
+      ? "workers-ai-whisper"
+      : (rescue?.tier ?? "none"),
+    extract: async (doc: HeldDoc): Promise<LaneResult> => {
+      const bytes = decodeB64(doc.bytes_b64);
+      const runRescue = async (): Promise<TranscribeOutcome> =>
+        transcribeMedia(
+          async (_model, inputs) => ({
+            text: await rescue!.run(String(inputs.audio)),
+          }),
+          bytes,
+          { model: rescue!.model },
+        );
+
+      if (providers.ai?.run) {
+        const out = await transcribeMedia(
+          providers.ai.run.bind(providers.ai),
+          bytes,
+        );
+        if (out.ok) {
+          return {
+            ok: true,
+            text: out.transcription.text,
+            tier: "workers-ai-whisper",
+            status: "transcribed",
+          };
+        }
+        if (!rescue) {
+          return {
+            ok: false,
+            reason:
+              `${out.reason}; no audio-capable registry entry configured ` +
+              "to rescue it",
+            tier: "workers-ai-whisper",
+          };
+        }
+        const rescued = await runRescue();
+        if (rescued.ok) {
+          return {
+            ok: true,
+            text: rescued.transcription.text,
+            tier: rescue.tier,
+            status: "rescued",
+          };
+        }
+        return {
+          ok: false,
+          reason: `${out.reason}; rescue lane failed: ${rescued.reason}`,
+          tier: rescue.tier,
+        };
+      }
+
+      if (rescue) {
+        const rescued = await runRescue();
+        if (rescued.ok) {
+          return {
+            ok: true,
+            text: rescued.transcription.text,
+            tier: rescue.tier,
+            status: "rescued",
+          };
+        }
+        return {
+          ok: false,
+          reason:
+            `Workers AI binding unavailable; rescue lane failed: ` +
+            `${rescued.reason}`,
+          tier: rescue.tier,
+        };
+      }
+
+      return {
+        ok: false,
+        reason:
+          `no capable provider configured for ${doc.lane} — enable the ` +
+          "Workers AI binding (env.AI) or add an audio-capable registry " +
+          "entry to transcribe this file",
+        tier: "none",
+      };
+    },
+  };
+
   return [
     documentLane("document"),
     documentLane("sheets"),
     documentLane("slides"),
     visionLane,
+    transcribeLane,
   ];
 }

@@ -2,6 +2,7 @@
 // automatic retrigger path. Grounding is structural: exhibit-free angles are
 // dropped by the proposers, and every stored angle is fenced (untrusted).
 
+import { MIRRORED_SQL } from "./mirror";
 import { unwrap } from "./evidence";
 import {
   flagSuspicious,
@@ -35,10 +36,12 @@ export async function proposeAndStoreAngles(
     recordTurn: (t: Turn) => Promise<void>;
   },
 ): Promise<ProposeResult> {
-  // Open the sealed mirror text for parsed docs only; held lanes have no
+  // Open the sealed mirror text for settled docs only; held lanes have no
   // text yet and contribute nothing.
   const rows = await db
-    .prepare("SELECT id, text_envelope FROM corpus_docs WHERE status = 'parsed'")
+    .prepare(
+      `SELECT id, text_envelope FROM corpus_docs WHERE ${MIRRORED_SQL}`,
+    )
     .all<{ id: string; text_envelope: string }>();
   const docs = await Promise.all(
     unwrap(rows).map(async (d) => ({

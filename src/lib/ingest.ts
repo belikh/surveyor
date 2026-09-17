@@ -20,12 +20,18 @@ export type Lane =
   | "held-docx"
   | "held-xlsx"
   | "held-pptx"
+  | "held-email"
+  | "held-archive"
   | "held-ocr"
+  | "held-audio"
+  | "held-video"
   | "rejected";
 
 export interface LaneDecision {
   lane: Lane;
   reason?: string;
+  /** Native delimited-table formatting for CSV/TSV text (C5). */
+  table?: "csv" | "tsv";
 }
 
 const ext = (filename: string): string => {
@@ -48,8 +54,14 @@ export function classifyLane(
   }
   const extension = ext(filename);
   const mime = contentType.toLowerCase();
-  if ([".txt", ".md", ".markdown", ".csv", ".tsv"].includes(extension)) {
+  if ([".txt", ".md", ".markdown"].includes(extension)) {
     return { lane: "native" };
+  }
+  if (extension === ".csv") {
+    return { lane: "native", table: "csv" };
+  }
+  if (extension === ".tsv") {
+    return { lane: "native", table: "tsv" };
   }
   if (extension === ".pdf" || mime === "application/pdf") {
     return { lane: "held-pdf", reason: "page render needs the model pass" };
@@ -64,12 +76,67 @@ export function classifyLane(
     return { lane: "held-pptx", reason: "slide walk needs the model pass" };
   }
   if (
+    extension === ".eml" ||
+    extension === ".mbox" ||
+    extension === ".mbx" ||
+    mime === "message/rfc822" ||
+    mime === "application/mbox"
+  ) {
+    return {
+      lane: "held-email",
+      reason: "email parses natively on drain; the model pass is the fallback",
+    };
+  }
+  if (
+    extension === ".zip" ||
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed"
+  ) {
+    return {
+      lane: "held-archive",
+      reason: "members parse natively on drain; the model pass is the fallback",
+    };
+  }
+  if (
     extension === ".png" ||
     extension === ".jpg" ||
     extension === ".jpeg" ||
     mime.startsWith("image/")
   ) {
     return { lane: "held-ocr", reason: "vision OCR needs the model pass" };
+  }
+  // Audio and video: the transcription lane (C6). The model family is the
+  // documented Whisper input set; an unreadable container still fails on
+  // drain with the chunk named, never silently.
+  if (
+    [
+      ".mp3",
+      ".mpga",
+      ".m4a",
+      ".wav",
+      ".aac",
+      ".flac",
+      ".ogg",
+      ".oga",
+      ".opus",
+    ].includes(extension) ||
+    mime.startsWith("audio/")
+  ) {
+    return {
+      lane: "held-audio",
+      reason: "transcription needs the Workers AI model pass",
+    };
+  }
+  if (
+    [".mp4", ".mov", ".webm", ".mkv", ".avi", ".mpeg", ".mpg"].includes(
+      extension,
+    ) ||
+    mime.startsWith("video/")
+  ) {
+    return {
+      lane: "held-video",
+      reason: "transcription needs the Workers AI model pass",
+    };
   }
   return { lane: "rejected", reason: `unsupported type ${extension || mime}` };
 }

@@ -3,6 +3,7 @@
 // held and rejected material never reaches a render.
 
 import { z } from "zod";
+import { MIRRORED_SQL } from "./mirror";
 import {
   ExhibitRefSchema,
   type Evidence,
@@ -22,7 +23,7 @@ export async function gatherEvidence(db: D1Database): Promise<Evidence> {
     .prepare("SELECT COUNT(*) AS n FROM submissions WHERE kind = 'addendum'")
     .first<{ n: number }>();
   const parsedCount = await db
-    .prepare("SELECT COUNT(*) AS n FROM corpus_docs WHERE status = 'parsed'")
+    .prepare(`SELECT COUNT(*) AS n FROM corpus_docs WHERE ${MIRRORED_SQL}`)
     .first<{ n: number }>();
   const heldCount = await db
     .prepare("SELECT COUNT(*) AS n FROM corpus_docs WHERE status = 'held'")

@@ -62,6 +62,28 @@ CREATE TABLE IF NOT EXISTS entity_index (
 );
 CREATE INDEX IF NOT EXISTS ix_entity_index_hmac ON entity_index(name_hmac);
 
+-- Break-glass entity reveals: opening a sealed name is an operator action
+-- that writes one audited record. Who/why are sealed (free text can carry
+-- a name); the HMAC and pseudonym links stay plaintext so the audit list
+-- is readable without opening records. The name itself is never stored
+-- here: re-reading it requires another audited reveal.
+CREATE TABLE IF NOT EXISTS entity_reveals (
+  id TEXT PRIMARY KEY,
+  name_hmac TEXT NOT NULL,
+  links_json TEXT NOT NULL,
+  record_envelope TEXT NOT NULL,
+  revealed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_entity_reveals_hmac ON entity_reveals(name_hmac);
+
+-- Case dossier operator notes. Sealed at rest; the operator-gated dossier
+-- opens them beside the machine-gathered investigation state.
+CREATE TABLE IF NOT EXISTS dossier_notes (
+  id TEXT PRIMARY KEY,
+  body_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS topics (
   submission_id TEXT NOT NULL,
   topic TEXT NOT NULL,
@@ -267,3 +289,30 @@ CREATE TABLE IF NOT EXISTS right_of_reply_attempts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_reply_attempts_report ON right_of_reply_attempts(report_type, version);
+
+-- Recording provenance (C8): the metadata carried by audio/video evidence,
+-- captured with the recording at ingest. Free text (recorder, date, place)
+-- is sealed; jurisdiction and consent status stay plaintext so the
+-- publication gate can decide without opening a record. A recording with no
+-- row is unknown, so the gate treats it as jurisdiction-sensitive.
+CREATE TABLE IF NOT EXISTS recording_provenance (
+  doc_id TEXT PRIMARY KEY,
+  jurisdiction TEXT NOT NULL,
+  consent_status TEXT NOT NULL,
+  detail_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- Recording reviews (C8): one legal review per report version and recording,
+-- tied to the version it releases like the defamation gate. Reviewer and
+-- notes are sealed; the version link stays plaintext for the gate check.
+CREATE TABLE IF NOT EXISTS recording_reviews (
+  id TEXT PRIMARY KEY,
+  report_type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  doc_id TEXT NOT NULL,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (report_type, version, doc_id)
+);
+CREATE INDEX IF NOT EXISTS ix_recording_reviews_version ON recording_reviews(report_type, version);

@@ -7,6 +7,7 @@
 // manual publish.
 
 import { z } from "zod";
+import { MIRRORED_SQL } from "./mirror";
 import { unwrap } from "./evidence";
 import type { Evidence } from "./reports";
 import { openText, sealText, type VaultKit } from "./vault";
@@ -123,7 +124,9 @@ export async function runJournalistPass(
   caps: PassCaps = PASS_CAPS,
 ): Promise<PassResult | null> {
   const rows = await db
-    .prepare("SELECT id, text_envelope FROM corpus_docs WHERE status = 'parsed'")
+    .prepare(
+      `SELECT id, text_envelope FROM corpus_docs WHERE ${MIRRORED_SQL}`,
+    )
     .all<{ id: string; text_envelope: string }>();
   const docs: Doc[] = [];
   for (const r of unwrap(rows)) {

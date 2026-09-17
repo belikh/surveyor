@@ -12,6 +12,7 @@ import {
   type PassCache,
 } from "./publish";
 import { LegalGateUnmet } from "./legal";
+import { RecordingGateUnmet } from "./recordings";
 import { unwrap } from "./evidence";
 import type { ModelClient } from "./serve";
 
@@ -197,11 +198,13 @@ export async function evaluateAll(
       const reason =
         err instanceof GatesUnmet
           ? `gates unmet: ${err.unmet.join(", ")}`
-          : err instanceof LegalGateUnmet
-            ? `legal gate unmet: ${err.unmet.join(", ")}`
-            : err instanceof ReportDisabled
-              ? "disabled"
-              : String((err as Error)?.message ?? err);
+          : err instanceof RecordingGateUnmet
+            ? `recording gate unmet: ${err.unmet.join(", ")}`
+            : err instanceof LegalGateUnmet
+              ? `legal gate unmet: ${err.unmet.join(", ")}`
+              : err instanceof ReportDisabled
+                ? "disabled"
+                : String((err as Error)?.message ?? err);
       receipts.push(await recordReceipt(db, r.type, "skipped", reason, withBaseline.danger, nowIso));
     }
   }

@@ -97,6 +97,7 @@ export function uncoveredSealedColumns(
 export const CIPHERTEXT_AUDIT_COLUMNS: SealedColumn[] = [
   { table: "messages", column: "body_envelope" },
   { table: "entities", column: "name_envelope" },
+  { table: "entity_reveals", column: "record_envelope" },
   { table: "corpus_docs", column: "text_envelope" },
   { table: "corpus_docs", column: "filename" },
   { table: "web_snapshots", column: "text_envelope" },
@@ -109,6 +110,9 @@ export const CIPHERTEXT_AUDIT_COLUMNS: SealedColumn[] = [
   { table: "consent_records", column: "record_envelope" },
   { table: "report_legal_records", column: "record_envelope" },
   { table: "right_of_reply_attempts", column: "record_envelope" },
+  { table: "recording_provenance", column: "detail_envelope" },
+  { table: "recording_reviews", column: "record_envelope" },
+  { table: "dossier_notes", column: "body_envelope" },
 ];
 
 /** A sealed column plus the row key the reseal path updates it by. */
@@ -138,5 +142,9 @@ export const RESEAL_COLUMNS: ResealColumn[] = [
   { table: "breach_assessments", column: "record_envelope", key: "id" },
   { table: "consent_records", column: "record_envelope", key: "id" },
   { table: "report_legal_records", column: "record_envelope", key: "id" },
+  { table: "entity_reveals", column: "record_envelope", key: "id" },
+  { table: "dossier_notes", column: "body_envelope", key: "id" },
+  { table: "recording_provenance", column: "detail_envelope", key: "doc_id" },
+  { table: "recording_reviews", column: "record_envelope", key: "id" },
   { table: "right_of_reply_attempts", column: "record_envelope", key: "id" },
 ];

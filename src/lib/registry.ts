@@ -13,7 +13,12 @@ import {
 
 export type UsableEntry = ProviderEntry;
 
-export type ProviderCapability = "chat" | "vision" | "search" | "extract";
+export type ProviderCapability =
+  | "chat"
+  | "vision"
+  | "search"
+  | "extract"
+  | "audio";
 
 /** Search/extract entry kinds. Their nature is the tag: a Tavily or
  *  Parallel entry is search-capable by kind, so an untagged entry can never
@@ -22,9 +27,10 @@ const SEARCH_KINDS: ReadonlySet<string> = new Set(["tavily", "parallel"]);
 
 /** Capability routing over the registry. Entries are chat-capable unless
  *  they are a search kind or tagged for a different transport; vision,
- *  search and extract each require their tag (or a search kind). One rule
- *  for every consumer, so a search entry is never spent on a chat call and
- *  a chat entry is never sent a web query. */
+ *  search, extract and audio each require their tag (or a search kind). One
+ *  rule for every consumer, so a search entry is never spent on a chat
+ *  call, a chat entry is never sent a web query, and only an audio-tagged
+ *  entry receives an audio chunk. */
 export function entriesForCapability<
   T extends { kind?: string; capabilities?: string[] },
 >(entries: T[], capability: ProviderCapability): T[] {

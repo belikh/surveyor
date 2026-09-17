@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import { searchMirror } from "./rounds";
+import { MIRRORED_SQL } from "./mirror";
 import { flagSuspicious } from "./engine";
 import { openText, sealText, type VaultKit } from "./vault";
 import {
@@ -80,10 +81,6 @@ export interface WebToolbox {
   fetch(url: string): Promise<WebPage>;
 }
 
-/** Statuses whose gated text sits in the mirror. Held docs are raw: the
- *  toolbox cannot reach them. */
-const MIRRORED = "status IN ('parsed', 'OCRed', 'rescued')";
-
 export function buildCorpusToolbox(
   db: D1Database,
   kit: VaultKit,
@@ -96,7 +93,7 @@ export function buildCorpusToolbox(
     async fetch(docId: string) {
       const row = await db
         .prepare(
-          `SELECT id, text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED}`,
+          `SELECT id, text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED_SQL}`,
         )
         .bind(docId)
         .first<{ id: string; text_envelope: string }>();
@@ -498,7 +495,7 @@ export async function finishLine(
     }
     const row = await db
       .prepare(
-        `SELECT text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED}`,
+        `SELECT text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED_SQL}`,
       )
       .bind(ci.doc_id)
       .first<{ text_envelope: string }>();
