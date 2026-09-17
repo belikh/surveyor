@@ -13,6 +13,22 @@ import {
 
 export type UsableEntry = ProviderEntry;
 
+export type ProviderCapability = "chat" | "vision" | "search";
+
+/** Capability routing over the registry. Entries are chat-capable unless
+ *  tagged for a different transport ("search"); vision and search each
+ *  require their tag. One rule for every consumer, so a search entry is
+ *  never spent on a chat call and a chat entry is never sent a web query. */
+export function entriesForCapability<T extends { capabilities?: string[] }>(
+  entries: T[],
+  capability: ProviderCapability,
+): T[] {
+  if (capability === "chat") {
+    return entries.filter((e) => !(e.capabilities ?? []).includes("search"));
+  }
+  return entries.filter((e) => (e.capabilities ?? []).includes(capability));
+}
+
 export interface ChainResolution {
   entries: UsableEntry[];
   degraded: boolean;

@@ -58,7 +58,8 @@ CF_OAUTH_SCOPES = ""
 
 # Secrets (set by the operator's own hands, never in this file):
 #   SERVER_SECRET, ENCRYPTION_KEY, OPERATOR_TOKEN   (generated at provision)
-#   GROQ_API_KEY, TOKENROUTER_API_KEY               (optional BYOK)
+#   GROQ_API_KEY, TOKENROUTER_API_KEY               (optional BYOK chat)
+#   TAVILY_API_KEY, PARALLEL_API_KEY                (optional BYOK search)
 #   TURNSTILE_SECRET                                (optional human-check)
 #   CF_OAUTH_CLIENT_SECRET                          (optional OAuth client)
 #   PUBLIC_BASE_URL                                 (optional origin override)

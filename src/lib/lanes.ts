@@ -5,7 +5,7 @@
 
 import type { Bindings } from "../env";
 import { buildChainClient } from "./serve";
-import { resolveChain } from "./registry";
+import { entriesForCapability, resolveChain } from "./registry";
 import { buildDrainHandlers, type AiBinding, type DrainHandler } from "./drain";
 import { currentProviders, hasSecretValue, secretValue } from "./providers";
 
@@ -21,9 +21,7 @@ export async function buildLaneProviders(
     },
     (slot) => hasSecretValue(env, slot),
   );
-  const visionEntries = chain.entries.filter((e) =>
-    (e.capabilities ?? []).includes("vision"),
-  );
+  const visionEntries = entriesForCapability(chain.entries, "vision");
   return {
     ai: env.AI as unknown as AiBinding,
     visionClient:

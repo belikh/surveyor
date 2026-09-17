@@ -86,6 +86,44 @@ describe("GET /api/providers", () => {
     ).toEqual(["c"]);
   });
 
+  it("stores and resolves more than two entries in operator order", async () => {
+    const env = makeEnv({
+      GROQ_API_KEY: "a",
+      TOKENROUTER_API_KEY: "b",
+      TAVILY_API_KEY: "c",
+      PARALLEL_API_KEY: "d",
+    });
+    await setupWithProviders(env, [
+      { kind: "groq", label: "g", secret_slot: "GROQ_API_KEY", model: "m" },
+      {
+        kind: "tokenrouter",
+        label: "t",
+        secret_slot: "TOKENROUTER_API_KEY",
+        model: "m",
+      },
+      {
+        kind: "tavily",
+        label: "tv",
+        secret_slot: "TAVILY_API_KEY",
+        model: "search",
+        capabilities: ["search"],
+      },
+      {
+        kind: "parallel",
+        label: "pl",
+        secret_slot: "PARALLEL_API_KEY",
+        model: "search",
+        capabilities: ["search"],
+      },
+    ]);
+    const body = (await (
+      await callApp(env, "/api/providers", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })
+    ).json()) as { entries: Array<{ label: string }> };
+    expect(body.entries.map((e) => e.label)).toEqual(["g", "t", "tv", "pl"]);
+  });
+
   it("never exposes secret values in the chain response", async () => {
     const env = makeEnv({ TOKENROUTER_API_KEY: "s3cr3t-value-xyz" });
     await setupWithProviders(env, [
@@ -97,6 +135,67 @@ describe("GET /api/providers", () => {
       })
     ).text();
     expect(text).not.toContain("s3cr3t-value-xyz");
+  });
+});
+
+describe("POST /api/providers/reorder", () => {
+  const twoEntries = [
+    { kind: "groq", label: "g", secret_slot: "GROQ_API_KEY", model: "m" },
+    {
+      kind: "tokenrouter",
+      label: "t",
+      secret_slot: "TOKENROUTER_API_KEY",
+      model: "m",
+    },
+  ];
+
+  it("401s without the operator token", async () => {
+    const res = await callApp(makeEnv(), "/api/providers/reorder", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from: 0, to: 1 }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("persists the new operator-visible order", async () => {
+    const env = makeEnv({ GROQ_API_KEY: "a", TOKENROUTER_API_KEY: "b" });
+    await setupWithProviders(env, twoEntries);
+    const res = await callApp(env, "/api/providers/reorder", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: JSON.stringify({ from: 0, to: 1 }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await (
+      await callApp(env, "/api/providers", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })
+    ).json()) as { entries: Array<{ label: string }> };
+    expect(body.entries.map((e) => e.label)).toEqual(["t", "g"]);
+  });
+
+  it("422s an out-of-range move and leaves the order untouched", async () => {
+    const env = makeEnv({ GROQ_API_KEY: "a", TOKENROUTER_API_KEY: "b" });
+    await setupWithProviders(env, twoEntries);
+    const res = await callApp(env, "/api/providers/reorder", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: JSON.stringify({ from: 0, to: 7 }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await (
+      await callApp(env, "/api/providers", {
+        headers: { authorization: `Bearer ${TOKEN}` },
+      })
+    ).json()) as { entries: Array<{ label: string }> };
+    expect(body.entries.map((e) => e.label)).toEqual(["g", "t"]);
   });
 });
 

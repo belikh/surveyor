@@ -13,6 +13,7 @@ import { surveyShell, SURVEY_JS } from "./frontend/survey";
 import { uploaderShell, UPLOADER_JS } from "./frontend/uploader";
 import PDF_TOOLS_JS from "../dist/pdf-tools.txt";
 import {
+  reorderProviders,
   resolveChain,
   validateCustomProvider,
 } from "./lib/registry";
@@ -271,6 +272,37 @@ app.get("/api/providers", async (c) => {
   if (denied) return c.json(deny(denied), denied);
   const s = await (await getState(c.env)).loadSetup();
   return c.json(resolveChain(s, (slot) => hasSecret(c.env, slot)));
+});
+
+// Operator order is the chain's priority: the wizard and dashboard move an
+// entry with a single index pair, and the stored state is the order every
+// resolution reads. Out-of-range moves change nothing.
+const ReorderBodySchema = z.object({
+  from: z.number().int().min(0),
+  to: z.number().int().min(0),
+});
+
+app.post("/api/providers/reorder", async (c) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  const parsed = ReorderBodySchema.safeParse(
+    await c.req.json().catch(() => ({})),
+  );
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const st = await getState(c.env);
+  const current = await st.loadSetup();
+  let providers;
+  try {
+    providers = reorderProviders(
+      current.providers,
+      parsed.data.from,
+      parsed.data.to,
+    );
+  } catch {
+    return c.json({ error: "reorder_out_of_range" }, 422);
+  }
+  await st.putSetup({ ...current, providers });
+  return c.json({ ok: true });
 });
 
 // Public degraded-status surface for the dashboard banner: booleans and

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  entriesForCapability,
   resolveChain,
   reorderProviders,
   validateCustomProvider,
@@ -54,6 +55,61 @@ describe("resolveChain", () => {
     const t = entry({ kind: "tokenrouter", label: "t", secret_slot: "TOKENROUTER_API_KEY" });
     const r = resolveChain(stateWith([g, t]), () => true);
     expect(r.entries.map((e) => e.label)).toEqual(["g", "t"]);
+  });
+
+  it("stores and resolves more than two entries across the expanded slots", () => {
+    const four = [
+      entry({ kind: "groq", label: "groq", secret_slot: "GROQ_API_KEY" }),
+      entry({
+        kind: "tokenrouter",
+        label: "tokenrouter",
+        secret_slot: "TOKENROUTER_API_KEY",
+      }),
+      entry({
+        kind: "tavily",
+        label: "tavily",
+        secret_slot: "TAVILY_API_KEY",
+        capabilities: ["search"],
+      }),
+      entry({
+        kind: "parallel",
+        label: "parallel",
+        secret_slot: "PARALLEL_API_KEY",
+        capabilities: ["search"],
+      }),
+    ];
+    const r = resolveChain(stateWith(four), () => true);
+    expect(r.entries.map((e) => e.label)).toEqual([
+      "groq",
+      "tokenrouter",
+      "tavily",
+      "parallel",
+    ]);
+    expect(r.degraded).toBe(false);
+  });
+});
+
+describe("entriesForCapability", () => {
+  const tagged = [
+    entry({ label: "plain" }),
+    entry({ label: "seer", capabilities: ["vision"] }),
+    entry({ label: "finder", capabilities: ["search"] }),
+  ];
+
+  it("routes chat to every entry not tagged for another transport", () => {
+    expect(entriesForCapability(tagged, "chat").map((e) => e.label)).toEqual([
+      "plain",
+      "seer",
+    ]);
+  });
+
+  it("routes vision and search by their tags", () => {
+    expect(entriesForCapability(tagged, "vision").map((e) => e.label)).toEqual([
+      "seer",
+    ]);
+    expect(entriesForCapability(tagged, "search").map((e) => e.label)).toEqual([
+      "finder",
+    ]);
   });
 });
 
