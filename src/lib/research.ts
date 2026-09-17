@@ -1,0 +1,473 @@
+// Research-line tool loop (B1): one capped, read-only pass over the gated
+// mirror per line, run as a Workflow step. The tool surface is search (FTS
+// over the mirror) and fetch (one document's gated text) — there is no
+// action capability and no write path. A keyless installation runs a
+// deterministic floor; a configured provider may drive the same tools.
+// Step or token caps halt the line into held rather than burning past them,
+// and model failures fall back to the floor with a telemetry row.
+
+import { z } from "zod";
+import { searchMirror } from "./rounds";
+import { flagSuspicious } from "./engine";
+import { unwrap } from "./evidence";
+import { openText, sealText, type VaultKit } from "./vault";
+import { recordTurn } from "./telemetry";
+import type { ModelClient } from "./serve";
+
+/** Per-line caps. Steps count model turns; tokens are approximated from
+ *  prompt and completion length because the client exposes text only. */
+export interface LoopCaps {
+  steps: number;
+  tokens: number;
+}
+
+export const RESEARCH_CAPS: LoopCaps = { steps: 8, tokens: 20_000 };
+
+export interface Citation {
+  doc_id: string;
+  snippet: string;
+}
+
+export interface CorpusToolbox {
+  search(query: string): Promise<Array<{ doc_id: string; snippet: string }>>;
+  fetch(docId: string): Promise<{ doc_id: string; text: string } | null>;
+}
+
+/** Statuses whose gated text sits in the mirror. Held docs are raw: the
+ *  toolbox cannot reach them. */
+const MIRRORED = "status IN ('parsed', 'OCRed', 'rescued')";
+
+export function buildCorpusToolbox(
+  db: D1Database,
+  kit: VaultKit,
+): CorpusToolbox {
+  return {
+    async search(query: string) {
+      const hits = await searchMirror(db, [query], 4);
+      return hits.map((h) => ({ doc_id: h.id, snippet: h.snippet }));
+    },
+    async fetch(docId: string) {
+      const row = await db
+        .prepare(
+          `SELECT id, text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED}`,
+        )
+        .bind(docId)
+        .first<{ id: string; text_envelope: string }>();
+      if (!row) return null;
+      return { doc_id: row.id, text: await openText(kit, row.text_envelope) };
+    },
+  };
+}
+
+export interface AngleBrief {
+  title: string;
+  topics: string[];
+  rationale: string;
+  exhibits: Citation[];
+}
+
+export type LoopOutcome =
+  | {
+      kind: "findings";
+      findings: string;
+      citations: Citation[];
+      tier: string;
+      steps: number;
+    }
+  | {
+      kind: "held";
+      flags: string[];
+      reason: string;
+      tier: string;
+      steps: number;
+    };
+
+const ActionSchema = z.union([
+  z.object({ tool: z.literal("search"), query: z.string().min(1).max(512) }),
+  z.object({ tool: z.literal("fetch"), doc_id: z.string().min(1).max(128) }),
+  z.object({
+    tool: z.literal("final"),
+    findings: z.string().min(1).max(50_000),
+    citations: z
+      .array(
+        z.object({
+          doc_id: z.string().min(1).max(128),
+          snippet: z.string().min(1).max(2000),
+        }),
+      )
+      .max(64),
+  }),
+]);
+
+/** ~4 characters per token both ways: the ModelClient exposes text only,
+ *  and exact usage accounting belongs to the spend work (B2). */
+function approxTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function excerpt(text: string, terms: string[]): string {
+  const lower = text.toLowerCase();
+  const hit = terms.find((t) => t.length > 3 && lower.includes(t.toLowerCase()));
+  if (hit === undefined) return text.trim().slice(0, 300);
+  const start = Math.max(0, lower.indexOf(hit.toLowerCase()) - 60);
+  return text.slice(start, start + 300).trim();
+}
+
+function draftFinding(angle: AngleBrief, citations: Citation[]): string {
+  const excerpts = citations
+    .map((c) => `"${c.snippet}" (${c.doc_id})`)
+    .join("; ");
+  return (
+    `Research on "${angle.title}" found ${citations.length} grounded ` +
+    `exhibit(s): ${excerpts}`
+  );
+}
+
+/**
+ * Deterministic floor: search the mirror for the angle's vocabulary, fetch
+ * the hits and cite exact excerpts. The angle's own exhibits are the
+ * fallback — they were grounded when the angle was proposed. No grounded
+ * exhibit means the line is held, never an invented finding.
+ */
+export async function floorLoop(
+  toolbox: CorpusToolbox,
+  angle: AngleBrief,
+): Promise<LoopOutcome> {
+  const terms = [
+    ...angle.title.toLowerCase().match(/[a-z0-9]+/g) ?? [],
+    ...angle.topics.flatMap((t) => t.toLowerCase().match(/[a-z0-9]+/g) ?? []),
+  ];
+  const citations: Citation[] = [];
+  const hits = await toolbox.search(terms.join(" "));
+  for (const hit of hits.slice(0, 3)) {
+    const doc = await toolbox.fetch(hit.doc_id);
+    if (!doc) continue;
+    const snippet = excerpt(doc.text, terms);
+    if (snippet.length > 0) {
+      citations.push({ doc_id: doc.doc_id, snippet });
+    }
+  }
+  if (citations.length === 0) {
+    for (const exhibit of angle.exhibits.slice(0, 3)) citations.push(exhibit);
+  }
+  if (citations.length === 0) {
+    return {
+      kind: "held",
+      flags: ["ungrounded"],
+      reason: "no mirrored document matched the angle",
+      tier: "extractive",
+      steps: 1,
+    };
+  }
+  return {
+    kind: "findings",
+    findings: draftFinding(angle, citations),
+    citations,
+    tier: "extractive",
+    steps: 1,
+  };
+}
+
+/**
+ * Provider-driven loop: each model turn is one step and asks for exactly
+ * one tool action. A final action counts only citations whose snippet
+ * occurs verbatim in a document this line fetched; anything less degrades
+ * to the floor. Unknown tools, unparseable turns and provider errors are
+ * model failures and degrade the same way.
+ */
+export async function liveLoop(
+  client: ModelClient,
+  toolbox: CorpusToolbox,
+  angle: AngleBrief,
+  caps: LoopCaps,
+): Promise<LoopOutcome> {
+  const header =
+    `Research the investigative angle "${angle.title}" using only the ` +
+    `read-only corpus tools below. Rationale: ${angle.rationale}\n` +
+    `Reply with one JSON object and nothing else.\n` +
+    `{"tool":"search","query":"..."} — search the gated mirror\n` +
+    `{"tool":"fetch","doc_id":"..."} — read one mirrored document\n` +
+    `{"tool":"final","findings":"...","citations":[{"doc_id":"...",` +
+    `"snippet":"..."}]} — finish; every snippet must occur verbatim in a ` +
+    `document you fetched.`;
+  const transcript: string[] = [];
+  const fetched = new Map<string, string>();
+  let steps = 0;
+  let tokens = 0;
+  while (true) {
+    if (steps >= caps.steps || tokens >= caps.tokens) {
+      return {
+        kind: "held",
+        flags: ["cap-exceeded"],
+        reason: `caps exhausted after ${steps} step(s)`,
+        tier: client.tier,
+        steps,
+      };
+    }
+    const prompt = [header, ...transcript].join("\n");
+    let raw: string;
+    try {
+      raw = await client.complete(prompt);
+    } catch {
+      const floor = await floorLoop(toolbox, angle);
+      return { ...floor, tier: "extractive-fallback", steps };
+    }
+    tokens += approxTokens(prompt) + approxTokens(raw);
+    steps++;
+    let action: z.infer<typeof ActionSchema>;
+    try {
+      action = ActionSchema.parse(JSON.parse(raw));
+    } catch {
+      const floor = await floorLoop(toolbox, angle);
+      return { ...floor, tier: "extractive-fallback", steps };
+    }
+    if (action.tool === "search") {
+      const hits = await toolbox.search(action.query);
+      transcript.push(`search "${action.query}" -> ${JSON.stringify(hits)}`);
+      continue;
+    }
+    if (action.tool === "fetch") {
+      const doc = await toolbox.fetch(action.doc_id);
+      if (doc) fetched.set(doc.doc_id, doc.text);
+      transcript.push(
+        `fetch ${action.doc_id} -> ${doc ? doc.text.slice(0, 2000) : "not found"}`,
+      );
+      continue;
+    }
+    const citations = action.citations.filter((ci) => {
+      const text = fetched.get(ci.doc_id);
+      return text !== undefined && text.includes(ci.snippet);
+    });
+    if (citations.length > 0) {
+      return {
+        kind: "findings",
+        findings: action.findings,
+        citations,
+        tier: client.tier,
+        steps,
+      };
+    }
+    const floor = await floorLoop(toolbox, angle);
+    return { ...floor, tier: "extractive-fallback", steps };
+  }
+}
+
+export type FinishResult =
+  | { ok: true; id: string; status: "complete" | "held"; flags: string[] }
+  | { ok: false; error: string; detail?: string };
+
+/**
+ * The one completion path, shared by the operator route and the workflow:
+ * citations are the price of completion, every cited doc must exist in the
+ * mirror, and suspicious findings are held rather than stored complete.
+ */
+export async function finishLine(
+  db: D1Database,
+  kit: VaultKit,
+  lineId: string,
+  completion: { citations: Citation[]; findings: string },
+): Promise<FinishResult> {
+  const line = await db
+    .prepare(
+      "SELECT id, status, spend_cap, spend_used FROM research_lines WHERE id = ?",
+    )
+    .bind(lineId)
+    .first<{
+      id: string;
+      status: string;
+      spend_cap: number;
+      spend_used: number;
+    }>();
+  if (!line) return { ok: false, error: "not_found" };
+  if (line.status !== "running") {
+    return { ok: false, error: "bad_state", detail: line.status };
+  }
+  if (completion.citations.length === 0) {
+    return { ok: false, error: "citations_required" };
+  }
+  const known = new Set(
+    unwrap(
+      await db.prepare("SELECT id FROM corpus_docs").all<{ id: string }>(),
+    ).map((r) => r.id),
+  );
+  const unknown = completion.citations.find((ci) => !known.has(ci.doc_id));
+  if (unknown) {
+    return { ok: false, error: "unknown_citation", detail: unknown.doc_id };
+  }
+  if (line.spend_used > line.spend_cap) {
+    return { ok: false, error: "over_cap" };
+  }
+  const flags = flagSuspicious(completion.findings, completion.citations);
+  const status = flags.length > 0 ? "held" : "complete";
+  await db
+    .prepare(
+      "UPDATE research_lines SET status = ?, citations_json = ?, findings_envelope = ?, flags_json = ? WHERE id = ?",
+    )
+    .bind(
+      status,
+      JSON.stringify(completion.citations),
+      await sealText(kit, completion.findings),
+      JSON.stringify(flags),
+      lineId,
+    )
+    .run();
+  return { ok: true, id: lineId, status, flags };
+}
+
+export interface ResearchReceipt {
+  line_id: string;
+  status: "complete" | "held" | "skipped";
+  tier: string;
+  steps: number;
+  citations: number;
+  flags: string[];
+  reason: string | null;
+}
+
+function parseStringArray(raw: string | undefined): string[] {
+  try {
+    const parsed = JSON.parse(raw ?? "[]") as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((t): t is string => typeof t === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseExhibits(raw: string | undefined): Citation[] {
+  try {
+    const parsed = z
+      .array(z.object({ doc_id: z.string(), snippet: z.string() }))
+      .parse(JSON.parse(raw ?? "[]"));
+    return parsed;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Run one research line end to end: read its angle, drive the loop (live
+ * or keyless floor), finish through the shared completion path, and record
+ * a telemetry turn with the step count and outcome. Already-finished lines
+ * are skipped, so a Workflow resume cannot research or bill twice.
+ */
+export async function runResearchLine(
+  db: D1Database,
+  kit: VaultKit,
+  lineId: string,
+  client: ModelClient | null,
+  opts: { caps?: LoopCaps } = {},
+): Promise<ResearchReceipt> {
+  const caps = opts.caps ?? RESEARCH_CAPS;
+  const line = await db
+    .prepare("SELECT id, angle_id, status FROM research_lines WHERE id = ?")
+    .bind(lineId)
+    .first<{ id: string; angle_id: string; status: string }>();
+  if (!line) {
+    return {
+      line_id: lineId,
+      status: "skipped",
+      tier: "none",
+      steps: 0,
+      citations: 0,
+      flags: [],
+      reason: "line not found",
+    };
+  }
+  if (line.status !== "running") {
+    return {
+      line_id: lineId,
+      status: "skipped",
+      tier: "none",
+      steps: 0,
+      citations: 0,
+      flags: [],
+      reason: `line ${line.status}`,
+    };
+  }
+  const angleRow = await db
+    .prepare(
+      "SELECT title, topics_json, rationale_envelope, exhibits_json FROM angles WHERE id = ?",
+    )
+    .bind(line.angle_id)
+    .first<{
+      title: string;
+      topics_json: string;
+      rationale_envelope: string;
+      exhibits_json: string;
+    }>();
+  let rationale = "";
+  try {
+    rationale = angleRow
+      ? await openText(kit, angleRow.rationale_envelope)
+      : "";
+  } catch {
+    rationale = "";
+  }
+  const angle: AngleBrief = {
+    title: angleRow?.title ?? "Untitled angle",
+    topics: parseStringArray(angleRow?.topics_json),
+    rationale,
+    exhibits: parseExhibits(angleRow?.exhibits_json),
+  };
+  const toolbox = buildCorpusToolbox(db, kit);
+  const outcome = client
+    ? await liveLoop(client, toolbox, angle, caps)
+    : await floorLoop(toolbox, angle);
+
+  let receipt: ResearchReceipt;
+  let telemetryOutcome: string;
+  if (outcome.kind === "findings") {
+    const finished = await finishLine(db, kit, lineId, {
+      citations: outcome.citations,
+      findings: outcome.findings,
+    });
+    receipt = finished.ok
+      ? {
+          line_id: lineId,
+          status: finished.status,
+          tier: outcome.tier,
+          steps: outcome.steps,
+          citations: outcome.citations.length,
+          flags: finished.flags,
+          reason: null,
+        }
+      : {
+          line_id: lineId,
+          status: "skipped",
+          tier: outcome.tier,
+          steps: outcome.steps,
+          citations: outcome.citations.length,
+          flags: [],
+          reason: finished.error,
+        };
+    telemetryOutcome = finished.ok ? finished.status : finished.error;
+  } else {
+    await db
+      .prepare(
+        "UPDATE research_lines SET status = 'held', flags_json = ? WHERE id = ? AND status = 'running'",
+      )
+      .bind(JSON.stringify(outcome.flags), lineId)
+      .run();
+    receipt = {
+      line_id: lineId,
+      status: "held",
+      tier: outcome.tier,
+      steps: outcome.steps,
+      citations: 0,
+      flags: outcome.flags,
+      reason: outcome.reason,
+    };
+    telemetryOutcome = outcome.flags.includes("cap-exceeded")
+      ? "capped"
+      : "held";
+  }
+  await recordTurn(db, {
+    tier: receipt.tier,
+    toolCalls: outcome.steps,
+    label: `line:${line.angle_id}`,
+    outcome: telemetryOutcome,
+  });
+  return receipt;
+}

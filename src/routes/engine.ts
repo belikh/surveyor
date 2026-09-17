@@ -7,12 +7,12 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { Bindings } from "../env";
 import { getState } from "../state";
-import { sealText } from "../lib/vault";
-import { judgeSignificance, flagSuspicious, normaliseTopic } from "../lib/engine";
+import { judgeSignificance, normaliseTopic } from "../lib/engine";
 import { judgeSignificanceLive } from "../lib/serve";
 import { recordTurn } from "../lib/telemetry";
 import { liveClient } from "../lib/providers";
 import { proposeAndStoreAngles } from "../lib/angles";
+import { finishLine } from "../lib/research";
 
 export const engine = new Hono<{ Bindings: Bindings }>();
 
@@ -194,52 +194,22 @@ engine.post("/lines/:id/complete", async (c) => {
   if (!id.success) return c.json({ error: "not_found" }, 404);
   const parsed = CompleteSchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
-  const line = await c.env.DB.prepare(
-    "SELECT id, status, spend_cap, spend_used FROM research_lines WHERE id = ?",
-  ).bind(id.data).first<{
-    id: string;
-    status: string;
-    spend_cap: number;
-    spend_used: number;
-  }>();
-  if (!line) return c.json({ error: "not_found" }, 404);
-  if (line.status !== "running") {
-    return c.json({ error: "bad_state", detail: line.status }, 409);
-  }
   // Citations are the price of completion: none, no completion — and
   // every cited doc must exist in the mirror.
-  if (parsed.data.citations.length === 0) {
-    return c.json({ error: "citations_required" }, 422);
+  const result = await finishLine(c.env.DB, app.kit, id.data, parsed.data);
+  if (!result.ok) {
+    const status = (
+      result.error === "not_found"
+        ? 404
+        : result.error === "bad_state" || result.error === "over_cap"
+          ? 409
+          : 422
+    ) as 404 | 409 | 422;
+    return result.detail === undefined
+      ? c.json({ error: result.error }, status)
+      : c.json({ error: result.error, detail: result.detail }, status);
   }
-  const known = new Set(
-    unwrap(
-      await c.env.DB.prepare("SELECT id FROM corpus_docs").all<{ id: string }>(),
-    ).map((r) => r.id),
-  );
-  const unknown = parsed.data.citations.filter((ci) => !known.has(ci.doc_id));
-  if (unknown.length > 0) {
-    return c.json({ error: "unknown_citation", detail: unknown[0].doc_id }, 422);
-  }
-  if (line.spend_used > line.spend_cap) {
-    return c.json({ error: "over_cap" }, 409);
-  }
-  const flags = flagSuspicious(
-    parsed.data.findings,
-    parsed.data.citations,
-  );
-  const status = flags.length > 0 ? "held" : "complete";
-  await c.env.DB.prepare(
-    "UPDATE research_lines SET status = ?, citations_json = ?, findings_envelope = ?, flags_json = ? WHERE id = ?",
-  )
-    .bind(
-      status,
-      JSON.stringify(parsed.data.citations),
-      await sealText(app.kit, parsed.data.findings),
-      JSON.stringify(flags),
-      id.data,
-    )
-    .run();
-  return c.json({ id: id.data, status, flags });
+  return c.json({ id: result.id, status: result.status, flags: result.flags });
 });
 
 async function ledgerTopics(db: D1Database): Promise<Set<string>> {

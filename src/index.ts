@@ -1012,7 +1012,8 @@ export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
   ): Promise<void> {
     const env = this.env;
     const params = event.payload ?? {};
-    if (params.line_id) {
+    const lineId = params.line_id;
+    if (lineId) {
       await step.do("record-line-opened", async () => {
         const { recordTurn } = await import("./lib/telemetry");
         await recordTurn(env.DB, {
@@ -1021,7 +1022,15 @@ export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
           label: `line:${params.angle_id ?? "unknown"}`,
           outcome: "opened",
         });
-        return params.line_id;
+        return lineId;
+      });
+      // The capped tool loop is one resumable step: the memo keeps a
+      // finished line from being researched (and billed) twice.
+      await step.do("research-line", async () => {
+        const st = await getState(env);
+        const client = await liveClient(env.DB, env);
+        const { runResearchLine } = await import("./lib/research");
+        return runResearchLine(env.DB, st.kit, lineId, client);
       });
     }
     await step.do("evaluate-report-frequencies", async () => {
