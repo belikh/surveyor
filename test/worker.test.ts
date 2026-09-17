@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 import app from "../src/index";
 import { boot } from "../src/state";
 import { createVaultKit, openText, sealText } from "../src/lib/vault";
+import {
+  CIPHERTEXT_AUDIT_COLUMNS,
+  RESEAL_COLUMNS,
+} from "../src/lib/ciphertext";
 import { FakeD1 } from "./helpers/d1";
 
 function makeEnv(operatorToken = "") {
@@ -148,10 +152,27 @@ describe("surveyor worker", () => {
 });
 
 describe("POST /api/audit/reseal", () => {
-  it("re-seals rows written under an old key pair", async () => {
+  const oldSecret = "old-server-secret";
+  const oldEncKey = "f".repeat(64);
+
+  async function reseal(env: ReturnType<typeof makeEnv>) {
+    return fetch_(env, "/api/audit/reseal", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer op-token",
+      },
+      body: JSON.stringify({
+        old_server_secret: oldSecret,
+        old_encryption_key: oldEncKey,
+      }),
+    });
+  }
+
+  it("re-seals rows written under an old key pair in every post-campaign table", async () => {
     const env = makeEnv("op-token");
     const { kit: newKit } = await boot(env as never);
-    const oldKit = await createVaultKit("old-server-secret", "f".repeat(64));
+    const oldKit = await createVaultKit(oldSecret, oldEncKey);
     const db = env.DB as FakeD1;
     await db
       .prepare(
@@ -166,17 +187,43 @@ describe("POST /api/audit/reseal", () => {
       .bind(await sealText(oldKit, "old testimony"))
       .run();
 
-    const res = await fetch_(env, "/api/audit/reseal", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: "Bearer op-token",
+    // The sealed columns streams B/C/D added: the rotation path must carry
+    // them too, not just the pre-campaign set.
+    const sealedRows = [
+      {
+        table: "breach_assessments",
+        column: "record_envelope",
+        id: "br1",
+        sql: "INSERT INTO breach_assessments (id, aware_at, decision, record_envelope, created_at, updated_at) VALUES ('br1','now','pending',?,'now','now')",
+        text: "breach facts",
       },
-      body: JSON.stringify({
-        old_server_secret: "old-server-secret",
-        old_encryption_key: "f".repeat(64),
-      }),
-    });
+      {
+        table: "consent_records",
+        column: "record_envelope",
+        id: "cr1",
+        sql: "INSERT INTO consent_records (id, submission_id, wording_version, record_envelope, created_at) VALUES ('cr1','s1',1,?,'now')",
+        text: "consent decision",
+      },
+      {
+        table: "report_legal_records",
+        column: "record_envelope",
+        id: "lr1",
+        sql: "INSERT INTO report_legal_records (id, report_type, version, reply_required, record_envelope, created_at) VALUES ('lr1','digest',1,1,?,'now')",
+        text: "legal review",
+      },
+      {
+        table: "right_of_reply_attempts",
+        column: "record_envelope",
+        id: "rr1",
+        sql: "INSERT INTO right_of_reply_attempts (id, report_type, version, outcome, attempted_at, record_envelope, created_at) VALUES ('rr1','digest',1,'sent','now',?,'now')",
+        text: "reply attempt",
+      },
+    ];
+    for (const row of sealedRows) {
+      await db.prepare(row.sql).bind(await sealText(oldKit, row.text)).run();
+    }
+
+    const res = await reseal(env);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       ok: boolean;
@@ -184,10 +231,65 @@ describe("POST /api/audit/reseal", () => {
     };
     expect(body.ok).toBe(true);
     expect(body.resealed["messages.body_envelope"]).toBe(1);
+    for (const row of sealedRows) {
+      expect(body.resealed[`${row.table}.${row.column}`]).toBe(1);
+      // Verification: every re-sealed row opens with the current kit.
+      const stored = (await db
+        .prepare(
+          `SELECT ${row.column} AS v FROM ${row.table} WHERE id = '${row.id}'`,
+        )
+        .first()) as { v: string };
+      expect(await openText(newKit, stored.v)).toBe(row.text);
+    }
+  });
+
+  it("reports envelopes no held kit can open as failed and leaves them untouched", async () => {
+    const env = makeEnv("op-token");
+    await boot(env as never);
+    const db = env.DB as FakeD1;
+    await db
+      .prepare(
+        "INSERT INTO submissions (id, code_hmac, status, kind, parent_id, round, created_at) VALUES ('s1','h','open','original',NULL,0,?)",
+      )
+      .bind(new Date().toISOString())
+      .run();
+    // Sealed under a key pair nobody holds: neither the current kit nor the
+    // supplied old pair can open it.
+    const foreign = await createVaultKit("someone-elses-secret", "a".repeat(64));
+    const orphan = await sealText(foreign, "unreadable");
+    await db
+      .prepare(
+        "INSERT INTO messages (submission_id, seq, role, kind, body_envelope) VALUES ('s1',0,'submitter','structured',?)",
+      )
+      .bind(orphan)
+      .run();
+
+    const res = await reseal(env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      failed: number;
+      resealed: Record<string, number>;
+    };
+    expect(body.ok).toBe(false);
+    expect(body.failed).toBe(1);
+    expect(body.resealed["messages.body_envelope"]).toBe(0);
     const row = (await db
       .prepare("SELECT body_envelope FROM messages")
       .first()) as { body_envelope: string };
-    expect(await openText(newKit, row.body_envelope)).toBe("old testimony");
+    expect(row.body_envelope).toBe(orphan);
+  });
+
+  it("covers every sealed column the at-rest audit inspects (A2)", () => {
+    const resealed = new Set(
+      RESEAL_COLUMNS.map((c) => `${c.table}.${c.column}`),
+    );
+    for (const c of CIPHERTEXT_AUDIT_COLUMNS) {
+      expect(
+        resealed.has(`${c.table}.${c.column}`),
+        `${c.table}.${c.column} is audited but never re-sealed`,
+      ).toBe(true);
+    }
   });
 
   it("requires the operator token", async () => {

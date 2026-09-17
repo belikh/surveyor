@@ -47,7 +47,8 @@ the code still falls short of a decision, with the owning ticket.
   Digital lanes parse natively (C1 #32, C2 #33) with the model pass as the
   fallback, the browser rasterisation path ships with the served PDF.js worker
   asset (A5, #6), and the dependency-free parser choice is recorded in 0002's
-  amendment.
+  amendment. The headless-browser check runs against an in-process seam in CI
+  (A6, #7); a real-browser driver run is still pending.
 - **0003** — research lines exist with citation validation and spend caps but do
   not research autonomously; a line completes through the operator's findings
   POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding
@@ -60,10 +61,10 @@ the code still falls short of a decision, with the owning ticket.
   stored gates are met; ADR-0015 retires it and records gates as advisory, and
   that code change is not yet claimed by a ticket.
 - **0005 / 0009** — provision and teardown have routes and receipts but have not
-  been exercised against a live Cloudflare account (A16, #17; A17, #18), and
-  re-provisioning is not yet non-destructive (A2, #3). The reseal path still
-  names the pre-campaign sealed-column set, so A2 must extend it alongside the
-  audit's list.
+  been exercised against a live Cloudflare account (A16, #17; A17, #18).
+  Re-provisioning is non-destructive (A2, #3): an existing key or operator
+  token is never rewritten, and the rotation path's reseal list covers every
+  sealed column the at-rest audit inspects.
 - **0015** — angles still queue for explicit approval rather than
   auto-approving unless flagged (B-series engine build, #19–#21), and it is the
   scheduled digest that still auto-publishes where gates are met (see 0004).

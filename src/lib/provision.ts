@@ -18,7 +18,15 @@ export interface CloudflareApi {
   createWorkflow(name: string): Promise<string>;
   getWorkflowId(name: string): Promise<string>;
   putCronTrigger(name: string): Promise<boolean>;
-  putSecret(slot: string, set: boolean): Promise<boolean>;
+  /**
+   * Ensure a slot: a generated slot is minted and written only when absent,
+   * an operator-supplied slot is presence-checked. Never rotates a set slot
+   * (A2). `set` is presence, `written` says whether this call wrote a value.
+   */
+  putSecret(
+    slot: string,
+    set: boolean,
+  ): Promise<{ set: boolean; written: boolean }>;
   listR2Objects(bucket: string): Promise<string[]>;
   deleteR2Objects(bucket: string, keys: string[]): Promise<boolean>;
   deleteWorker(name: string): Promise<boolean>;
@@ -56,7 +64,18 @@ export interface ProvisionReceipt {
   queue: { id: string };
   workflow: { id: string };
   cron: boolean;
-  secrets: Array<{ slot: string; set: boolean; generated: boolean }>;
+  /**
+   * Slot names and booleans only, never values (constitution II):
+   * `set` = the slot exists after provisioning, `generated` = this run
+   * minted it, `written` = this run wrote it (A2 keeps re-runs from
+   * rotating anything already set).
+   */
+  secrets: Array<{
+    slot: string;
+    set: boolean;
+    generated: boolean;
+    written: boolean;
+  }>;
 }
 
 export interface TeardownReceipt {
@@ -162,10 +181,15 @@ export async function provisionStack(
 
   const secrets: ProvisionReceipt["secrets"] = [];
   for (const s of plan.secrets) {
-    const set = await step(`putSecret:${s.slot}`, () =>
+    const result = await step(`putSecret:${s.slot}`, () =>
       api.putSecret(s.slot, s.generate),
     );
-    secrets.push({ slot: s.slot, set, generated: s.generate });
+    secrets.push({
+      slot: s.slot,
+      set: result.set,
+      generated: result.written && s.generate,
+      written: result.written,
+    });
   }
 
   return { worker: { id: worker }, d1: { id: d1 }, r2: { id: r2 }, queue: { id: queue }, workflow: { id: workflow }, cron, secrets };

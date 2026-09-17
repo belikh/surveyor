@@ -53,6 +53,7 @@ import { resolveEntityLinks } from "./lib/entities";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import {
   CIPHERTEXT_AUDIT_COLUMNS,
+  RESEAL_COLUMNS,
   uncoveredSealedColumns,
 } from "./lib/ciphertext";
 import SCHEMA_SQL from "./db/schema.sql";
@@ -694,27 +695,14 @@ app.get("/api/intake/entities/links", async (c) => {
 // (for example a deployment that ran on the retired development constants)
 // are opened with the supplied old kit and written back with the current
 // installation kit. Operator-gated, idempotent, and skips rows already
-// readable with the current kit.
+// readable with the current kit. The column list lives with the rest of the
+// sealed-column enumeration in `ciphertext.ts`, and a coverage test gates it
+// against the at-rest audit's list so rotation never leaves a sealed column
+// behind (A2).
 const ResealBodySchema = z.object({
   old_server_secret: z.string().min(1).max(4096),
   old_encryption_key: z.string().min(1).max(4096),
 });
-
-const RESEAL_COLUMNS: Array<{
-  table: string;
-  column: string;
-  key: string;
-}> = [
-  { table: "messages", column: "body_envelope", key: "rowid" },
-  { table: "entities", column: "name_envelope", key: "rowid" },
-  { table: "attachments", column: "filename", key: "id" },
-  { table: "corpus_docs", column: "text_envelope", key: "id" },
-  { table: "corpus_docs", column: "filename", key: "id" },
-  { table: "angles", column: "rationale_envelope", key: "id" },
-  { table: "research_lines", column: "findings_envelope", key: "id" },
-  { table: "report_versions", column: "body_envelope", key: "id" },
-  { table: "report_entries", column: "entry_envelope", key: "id" },
-];
 
 app.post("/api/audit/reseal", async (c) => {
   const denied = await requireOperator(c);
@@ -748,10 +736,16 @@ app.post("/api/audit/reseal", async (c) => {
       }
       try {
         const text = await openText(oldKit, envelope);
+        const resealed = await sealText(st.kit, text);
+        // Verify before writing: an envelope the current kit cannot open
+        // back is counted failed, never written as if it were sound.
+        if ((await openText(st.kit, resealed)) !== text) {
+          throw new Error("re-sealed envelope failed verification");
+        }
         statements.push(
           c.env.DB.prepare(
             `UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`,
-          ).bind(await sealText(st.kit, text), row.k),
+          ).bind(resealed, row.k),
         );
         n++;
       } catch {

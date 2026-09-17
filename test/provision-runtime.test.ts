@@ -41,10 +41,14 @@ function json(result: unknown, status = 200) {
   });
 }
 
-/** One stub for every Cloudflare endpoint the provisioner/teardown touch. */
+/** One stub for every Cloudflare endpoint the provisioner/teardown touch.
+ *  `existingSecrets` names the slots the Worker secret store already holds;
+ *  `puts` records every secret the stub was asked to write. */
 function stubCloudflare(
   overrides: Partial<Record<string, () => Response>> = {},
+  existingSecrets: string[] = [],
 ) {
+  const puts: string[] = [];
   vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
     const u = String(url);
     const m = (init?.method ?? "GET").toUpperCase();
@@ -55,10 +59,17 @@ function stubCloudflare(
     if (m === "POST" && u.endsWith("/d1/database")) return json({ uuid: "d1-1" });
     if (m === "POST" && u.endsWith("/r2/buckets")) return json({});
     if (m === "POST" && u.endsWith("/queues")) return json({ queue_id: "q-1" });
-    if (m === "GET" && u.endsWith("/secrets")) return json([]);
+    if (m === "PUT" && u.endsWith("/secrets")) {
+      const body = JSON.parse(String(init.body)) as { name: string };
+      puts.push(body.name);
+    }
+    if (m === "GET" && u.endsWith("/secrets")) {
+      return json(existingSecrets.map((name) => ({ name })));
+    }
     if (m === "GET" && u.includes("/objects")) return json([]);
     return json({});
   });
+  return { puts };
 }
 
 async function provision(env: Record<string, unknown>) {
@@ -75,7 +86,7 @@ afterEach(() => {
 
 describe("runtime provision (R3)", () => {
   it("provisions the stack and persists a receipt", async () => {
-    stubCloudflare();
+    const { puts } = stubCloudflare();
     const env = makeEnv();
     const res = await provision(env);
     expect(res.status).toBe(200);
@@ -87,6 +98,9 @@ describe("runtime provision (R3)", () => {
     expect(body.receipt.d1.id).toBe("d1-1");
     expect(body.receipt.r2.id).toBe("surveyor-corpus");
     expect(body.receipt.queue.id).toBe("q-1");
+    // Only minted slots are written; operator-supplied slots are
+    // presence-checked, so the operator token is never overwritten.
+    expect(puts.sort()).toEqual(["ENCRYPTION_KEY", "SERVER_SECRET"]);
 
     const row = (await (env.DB as FakeD1)
       .prepare("SELECT receipt_json FROM provision WHERE id = 1")
@@ -94,8 +108,52 @@ describe("runtime provision (R3)", () => {
     expect(row.receipt_json).toContain("d1-1");
     // Receipt entries carry slots and booleans, never values.
     for (const s of body.receipt.secrets) {
-      expect(Object.keys(s).sort()).toEqual(["generated", "set", "slot"]);
+      expect(Object.keys(s).sort()).toEqual([
+        "generated",
+        "set",
+        "slot",
+        "written",
+      ]);
     }
+  });
+
+  it("re-provisions without rotating existing keys or the operator token (A2)", async () => {
+    // The installation is already booted: every slot the plan names is
+    // present in the secret store.
+    const existing = [
+      "SERVER_SECRET",
+      "ENCRYPTION_KEY",
+      "OPERATOR_TOKEN",
+      "GROQ_API_KEY",
+      "TOKENROUTER_API_KEY",
+      "TURNSTILE_SECRET",
+    ];
+    const { puts } = stubCloudflare({}, existing);
+    const env = makeEnv();
+    const res = await provision(env);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      receipt: { secrets: Array<Record<string, unknown>> };
+    };
+    expect(body.ok).toBe(true);
+    // Nothing was written: no key rotated, no slot touched.
+    expect(puts).toEqual([]);
+    expect(body.receipt.secrets).toEqual([
+      { slot: "SERVER_SECRET", set: true, generated: false, written: false },
+      { slot: "ENCRYPTION_KEY", set: true, generated: false, written: false },
+      { slot: "OPERATOR_TOKEN", set: true, generated: false, written: false },
+      { slot: "GROQ_API_KEY", set: true, generated: false, written: false },
+      { slot: "TOKENROUTER_API_KEY", set: true, generated: false, written: false },
+      { slot: "TURNSTILE_SECRET", set: true, generated: false, written: false },
+    ]);
+    // Access survives: the operator token still gates the write surface.
+    const setup = await callApp(env, "/api/setup", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ kind: "providers", providers: [] }),
+    });
+    expect(setup.status).toBe(200);
   });
 
   it("fails loud with the failing step, persisting nothing", async () => {
