@@ -1,22 +1,25 @@
 // Forwarding a request body into object storage under workerd's rules.
 //
-// R2 `put` accepts only a value with a known length: the readable half of a
-// `FixedLengthStream`, never a stream derived from a counting transform.
-// `storeBody` therefore has two paths:
+// R2 `put` accepts only a value with a known length — a request body or the
+// readable half of a `FixedLengthStream` — never a counting transform's
+// output. `storeBody` therefore has three paths:
 //
-//   - a declared `content-length`: the counted stream is piped through a
-//     FixedLengthStream of that length, and its readable half goes to R2 —
-//     the bytes stream to object storage without ever sitting in isolate
-//     memory, and workerd itself rejects a body that overruns or undershoots
-//     the declared length;
-//   - no declared length (a chunked client): the counted stream is drained
-//     in bounded chunks and the assembled buffer is stored. Memory is still
-//     bounded by the cap, and no path calls `arrayBuffer()` on the request.
+//   - a valid declared `content-length`: the counted stream is piped through
+//     a FixedLengthStream of that length and its readable half goes to R2.
+//     The bytes stream to object storage without sitting in isolate memory,
+//     and workerd rejects a body that overruns or undershoots the declared
+//     length;
+//   - no declared length (a chunked client): a multipart upload in bounded
+//     parts of PART_BYTES, so at most one part sits in isolate memory
+//     whatever the body length;
+//   - no bucket (native text lanes decode in-request): the body is drained
+//     and, when asked, collected whole — those lanes mirror the text anyway.
 //
 // An over-cap body errors the counter: the streaming path surfaces that
-// through the failed put, the buffered path through the read loop. Both
+// through the failed put, the multipart path through the read loop. Both
 // return with `overCap` set rather than throwing, so routes map their own
-// status (413/422) while every other failure stays loud.
+// status (413/422) while every other failure stays loud. A declared length
+// above the cap is rejected before the body is read at all.
 
 export interface StoredBody {
   /** Bytes the counter saw. */
@@ -29,23 +32,34 @@ export interface StoredBody {
   stored: boolean;
 }
 
+/** Multipart part size: bound on the isolate memory an unknown-length body uses. */
+export const PART_BYTES = 8 * 1024 * 1024;
+
+function parseDeclaredLength(header: string | null): number | null {
+  if (header === null || header.trim() === "") return null;
+  const length = Number(header);
+  return Number.isInteger(length) && length >= 0 ? length : null;
+}
+
 export async function storeBody(
   body: ReadableStream<Uint8Array>,
   opts: {
     cap: number;
     /** Keep the bytes in the result (native text lanes decode in-request). */
     collect?: boolean;
-    /** `content-length` when the request declared one, else null. */
-    declaredLength: number | null;
+    /** The raw `content-length` header; parsed and validated here. */
+    declaredLengthHeader: string | null;
     /** Where to store; null drains the body without storing (native text). */
     bucket: R2Bucket | null;
     key: string;
   },
 ): Promise<StoredBody> {
-  const declared = opts.declaredLength;
-  const streams =
-    opts.bucket !== null && declared !== null && Number.isFinite(declared) && declared >= 0;
-  const keepsChunks = Boolean(opts.collect) || (opts.bucket !== null && !streams);
+  const declared = parseDeclaredLength(opts.declaredLengthHeader);
+  if (declared !== null && declared > opts.cap) {
+    return { size: 0, overCap: true, bytes: null, stored: false };
+  }
+
+  const collect = Boolean(opts.collect);
   let size = 0;
   let overCap = false;
   const chunks: Uint8Array[] = [];
@@ -58,7 +72,7 @@ export async function storeBody(
           controller.error(new Error("body exceeds the cap"));
           return;
         }
-        if (keepsChunks) chunks.push(chunk);
+        if (collect) chunks.push(chunk);
         controller.enqueue(chunk);
       },
     }),
@@ -74,17 +88,23 @@ export async function storeBody(
   };
 
   let stored = false;
-  if (streams) {
+  if (opts.bucket && declared !== null) {
     const fixed = new FixedLengthStream(declared);
     // The counter may error on an over-cap body; that failure reaches the
-    // caller through the put below, so the pipe itself is left unhandled.
-    counted.pipeTo(fixed.writable).catch(() => {});
+    // caller through the put below, so the pipe itself is left unhandled
+    // here and awaited after.
+    const piped = counted.pipeTo(fixed.writable).catch(() => {});
     try {
-      await opts.bucket!.put(opts.key, fixed.readable);
+      await opts.bucket.put(opts.key, fixed.readable);
       stored = true;
     } catch (err) {
+      // Unblock the pipe so the request body is released, never left locked.
+      await fixed.readable.cancel().catch(() => {});
       if (!overCap) throw err;
     }
+    await piped;
+  } else if (opts.bucket) {
+    stored = await storeMultipart(opts.bucket, opts.key, counted, () => overCap);
   } else {
     const reader = counted.getReader();
     try {
@@ -95,16 +115,63 @@ export async function storeBody(
     } catch (err) {
       if (!overCap) throw err;
     }
-    if (!overCap && opts.bucket) {
-      await opts.bucket.put(opts.key, collected());
-      stored = true;
-    }
   }
 
   return {
     size,
     overCap,
-    bytes: !overCap && opts.collect ? collected() : null,
+    bytes: collect && !overCap ? collected() : null,
     stored,
   };
+}
+
+/**
+ * Store an unknown-length body as a multipart upload: each part is at most
+ * PART_BYTES, so isolate memory is bounded by one part rather than the body.
+ * An over-cap body errors the counter, the read loop aborts the upload, and
+ * no object ever becomes visible; every other failure stays loud.
+ */
+async function storeMultipart(
+  bucket: R2Bucket,
+  key: string,
+  counted: ReadableStream<Uint8Array>,
+  isOverCap: () => boolean,
+): Promise<boolean> {
+  const reader = counted.getReader();
+  const upload = await bucket.createMultipartUpload(key);
+  let part = new Uint8Array(PART_BYTES);
+  let held = 0;
+  const parts: R2UploadedPart[] = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      let offset = 0;
+      while (offset < value.byteLength) {
+        const take = Math.min(PART_BYTES - held, value.byteLength - offset);
+        part.set(value.subarray(offset, offset + take), held);
+        held += take;
+        offset += take;
+        if (held === PART_BYTES) {
+          parts.push(await upload.uploadPart(parts.length + 1, part));
+          part = new Uint8Array(PART_BYTES);
+          held = 0;
+        }
+      }
+    }
+    if (held === 0 && parts.length === 0) {
+      // Empty body: no part worth completing, and the route rejects it.
+      await upload.abort();
+      return false;
+    }
+    if (held > 0) {
+      parts.push(await upload.uploadPart(parts.length + 1, part.subarray(0, held)));
+    }
+    await upload.complete(parts);
+    return true;
+  } catch (err) {
+    await upload.abort().catch(() => {});
+    if (isOverCap()) return false;
+    throw err;
+  }
 }

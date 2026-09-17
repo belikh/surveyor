@@ -155,7 +155,7 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     expect(row.filename.startsWith("v1.")).toBe(true);
   });
 
-  it("streams a chunked body without buffering and records the streamed size", async () => {
+  it("stores a chunked body in bounded parts and records the exact size", async () => {
     const env = makeEnv();
     const { id, code } = await createSubmission(env);
     const chunks = [
@@ -220,6 +220,15 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     );
     expect(res.status).toBe(413);
     expect(((await res.json()) as { error: string }).error).toBe("too_large");
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
+  it("refuses a body that undershoots its declared length, leaving no object", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    const chunks = [new TextEncoder().encode("short")];
+    const res = await streamedUpload(env, id, code, chunks, "scan.png", 1000);
+    expect(res.status).toBe(400);
     expect((env.CORPUS as FakeR2).keys()).toEqual([]);
   });
 

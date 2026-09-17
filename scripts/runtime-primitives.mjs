@@ -5,6 +5,7 @@
 // `wrangler dev`) and exercises the runtime primitives the app depends on:
 //
 //   queue:delivery     a held upload is delivered to the queue consumer and acked
+//   r2:multipart       an unknown-length body is stored as bounded parts
 //   queue:retry        a failing message is retried and then dropped after maxRetries
 //   r2:range-read      R2 byte ranges return exactly the requested slice
 //   r2:delete          R2 delete removes the object and leaves no tombstone
@@ -160,6 +161,46 @@ try {
     );
   } catch (err) {
     add(fail("queue:delivery", String(err)));
+  }
+
+  // --- r2:multipart ---------------------------------------------------
+  try {
+    // A held upload with no content-length can only reach R2 through the
+    // multipart path (put rejects unknown-length streams), so this receipt
+    // proves workerd accepts the parts and assembles the object.
+    const payload = new TextEncoder().encode("fake-chunked-scan");
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(payload.subarray(0, 6));
+        controller.enqueue(payload.subarray(6));
+        controller.close();
+      },
+    });
+    const res = await mf.dispatchFetch(`${base}/api/corpus`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "x-filename": encodeURIComponent("chunked-scan.png"),
+        "content-type": "image/png",
+      },
+      body: stream,
+      duplex: "half",
+    });
+    if (res.status !== 200) {
+      throw new Error(`chunked held upload answered HTTP ${res.status}`);
+    }
+    const { id } = await res.json();
+    const object = await bucket.get(`corpus/${id}`);
+    if (!object) throw new Error("multipart object is not visible after completion");
+    const stored = new Uint8Array(await object.arrayBuffer());
+    if (stored.byteLength !== payload.byteLength) {
+      throw new Error(
+        `object length ${stored.byteLength} != body length ${payload.byteLength}`,
+      );
+    }
+    add(pass("r2:multipart", `chunked upload stored as parts (${stored.byteLength} bytes)`));
+  } catch (err) {
+    add(fail("r2:multipart", String(err)));
   }
 
   // --- queue:retry ----------------------------------------------------

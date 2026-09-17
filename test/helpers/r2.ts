@@ -1,36 +1,39 @@
 // Minimal in-memory R2 facade for route tests. Accepts the shapes the
-// Worker passes: Uint8Array (direct puts) and ReadableStream (streamed
-// uploads, e.g. submitter attachments).
+// Worker passes: Uint8Array/ArrayBuffer (direct and multipart puts) and
+// ReadableStream (the declared-length streamed upload path).
+
+async function toBytes(
+  value: Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>,
+): Promise<Uint8Array> {
+  if (value instanceof Uint8Array) return new Uint8Array(value);
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  const chunks: Uint8Array[] = [];
+  const reader = value.getReader();
+  for (;;) {
+    const { done, value: chunk } = await reader.read();
+    if (done) break;
+    if (chunk) chunks.push(chunk);
+  }
+  const total = chunks.reduce((n, c) => n + c.length, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.length;
+  }
+  return out;
+}
+
 export class FakeR2 {
   private store = new Map<string, Uint8Array>();
+  /** Byte length of every multipart part uploaded, for memory-bound assertions. */
+  partSizes: number[] = [];
 
   async put(
     key: string,
     value: Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>,
   ): Promise<void> {
-    if (value instanceof Uint8Array) {
-      this.store.set(key, new Uint8Array(value));
-      return;
-    }
-    if (value instanceof ArrayBuffer) {
-      this.store.set(key, new Uint8Array(value));
-      return;
-    }
-    const chunks: Uint8Array[] = [];
-    const reader = value.getReader();
-    for (;;) {
-      const { done, value: chunk } = await reader.read();
-      if (done) break;
-      if (chunk) chunks.push(chunk);
-    }
-    const total = chunks.reduce((n, c) => n + c.length, 0);
-    const out = new Uint8Array(total);
-    let offset = 0;
-    for (const c of chunks) {
-      out.set(c, offset);
-      offset += c.length;
-    }
-    this.store.set(key, out);
+    this.store.set(key, await toBytes(value));
   }
 
   async get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null> {
@@ -52,5 +55,42 @@ export class FakeR2 {
 
   keys(): string[] {
     return [...this.store.keys()];
+  }
+
+  async createMultipartUpload(key: string) {
+    const self = this;
+    const parts = new Map<number, Uint8Array>();
+    return {
+      key,
+      uploadId: crypto.randomUUID(),
+      uploadPart: async (
+        partNumber: number,
+        value: Uint8Array | ArrayBuffer | ReadableStream<Uint8Array>,
+      ) => {
+        const bytes = await toBytes(value);
+        self.partSizes.push(bytes.byteLength);
+        parts.set(partNumber, bytes);
+        return { partNumber, etag: `etag-${partNumber}` };
+      },
+      complete: async (uploaded: Array<{ partNumber: number }>) => {
+        const ordered = uploaded.map((p) => {
+          const bytes = parts.get(p.partNumber);
+          if (!bytes) throw new Error(`missing multipart part ${p.partNumber}`);
+          return bytes;
+        });
+        const total = ordered.reduce((n, b) => n + b.byteLength, 0);
+        const out = new Uint8Array(total);
+        let offset = 0;
+        for (const b of ordered) {
+          out.set(b, offset);
+          offset += b.byteLength;
+        }
+        self.store.set(key, out);
+        return { key, etag: "etag" };
+      },
+      abort: async () => {
+        parts.clear();
+      },
+    };
   }
 }

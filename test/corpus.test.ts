@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import app from "../src/index";
 import { MAX_DOC_BYTES } from "../src/lib/ingest";
+import { PART_BYTES } from "../src/lib/upload";
 import { FakeD1 } from "./helpers/d1";
 import { FakeR2 } from "./helpers/r2";
 
@@ -244,6 +245,32 @@ describe("corpus routes", () => {
     expect(res.status).toBe(422);
     expect(((await res.json()) as { error: string }).error).toBe("rejected");
     expect(r2.keys()).toEqual([]);
+  });
+
+  it("stores a chunked held upload as bounded multipart parts", async () => {
+    const r2 = new RecordingR2();
+    const sent: Array<Record<string, unknown>> = [];
+    const env = makeEnv({
+      CORPUS: r2 as never,
+      INGEST: {
+        send: async (message: Record<string, unknown>) => {
+          sent.push(message);
+        },
+      } as never,
+    });
+    const size = PART_BYTES + 1024 * 1024;
+    const res = await streamedUpload(env, "chunked-scan.png", "image/png", [
+      new Uint8Array(size),
+    ]);
+    expect(res.status).toBe(200);
+    // At most one part sits in isolate memory whatever the body length.
+    expect(r2.partSizes.length).toBe(2);
+    expect(Math.max(...r2.partSizes)).toBeLessThanOrEqual(PART_BYTES);
+    const row = (await (env.DB as FakeD1)
+      .prepare("SELECT raw_key FROM corpus_docs")
+      .first()) as { raw_key: string };
+    const stored = await r2.get(row.raw_key);
+    expect((await stored!.arrayBuffer()).byteLength).toBe(size);
   });
 
   it("rejects an empty stream", async () => {

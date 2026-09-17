@@ -58,20 +58,10 @@ corpus.post("/", async (c) => {
   // streams straight into R2 (the FixedLengthStream path), a chunked body is
   // buffered under the cap. Native text is collected for the in-request
   // decode; held bytes are never retained raw.
-  const declaredHeader = c.req.header("content-length");
-  const declaredLength =
-    declaredHeader === undefined ? null : Number(declaredHeader);
-  if (
-    declaredLength !== null &&
-    Number.isFinite(declaredLength) &&
-    declaredLength > MAX_DOC_BYTES
-  ) {
-    return c.json({ error: "rejected", detail: "size exceeds cap" }, 422);
-  }
   const forwarded = await storeBody(body, {
     cap: MAX_DOC_BYTES,
     collect: status === "parsed",
-    declaredLength,
+    declaredLengthHeader: c.req.header("content-length") ?? null,
     bucket: status === "held" && c.env.CORPUS ? c.env.CORPUS : null,
     key,
   });

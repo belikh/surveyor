@@ -385,28 +385,18 @@ intake.post("/:id/attachments", async (c) => {
   if (lane === "rejected") {
     return c.json({ error: "rejected", detail: "unsupported type" }, 422);
   }
-  const declaredHeader = c.req.header("content-length");
-  const declaredLength =
-    declaredHeader === undefined ? null : Number(declaredHeader);
-  if (
-    declaredLength !== null &&
-    Number.isFinite(declaredLength) &&
-    declaredLength > ATTACH_MAX_BYTES
-  ) {
-    return c.json({ error: "too_large", detail: "50 MB per file" }, 413);
-  }
   const body = c.req.raw.body;
   if (!body) return c.json({ error: "empty_file" }, 422);
   const attId = crypto.randomUUID();
   const key = `attachments/${id}/${attId}`;
   // Forward the body straight into R2 through the counting, capping
   // transform: a declared content-length streams (the FixedLengthStream
-  // path), a chunked body is buffered under the cap. The bytes never reach
-  // `arrayBuffer()`, and an over-cap body fails before a usable object
-  // exists.
+  // path), a chunked body is stored as bounded multipart parts. The bytes
+  // never reach `arrayBuffer()`, and an over-cap body fails before a usable
+  // object exists.
   const forwarded = await storeBody(body, {
     cap: ATTACH_MAX_BYTES,
-    declaredLength,
+    declaredLengthHeader: c.req.header("content-length") ?? null,
     bucket: c.env.CORPUS,
     key,
   });
