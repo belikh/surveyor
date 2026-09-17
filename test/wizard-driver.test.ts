@@ -14,8 +14,7 @@ function json(status: number, body: unknown): Response {
   });
 }
 
-describe("wizard driver initial render", () => {
-  it("renders the boot panel on a fresh install (setup 503)", async () => {
+describe("wizard driver initial render", () => {  it("renders the boot panel on a fresh install (setup 503)", async () => {
     const text = await renderWizard(async (path) => {
       if (path === "/api/setup") {
         return json(503, { error: "not_provisioned" });
@@ -63,5 +62,14 @@ describe("wizard driver initial render", () => {
       throw new Error(`unexpected fetch ${path}`);
     });
     expect(text).toContain("Worker token");
+  });
+});
+
+describe("wizard shell", () => {
+  it("carries no inline script, so the page honours script-src 'self'", async () => {
+    const { wizardShell } = await import("../src/frontend/chrome");
+    const html = wizardShell("Surveyor — test", "off");
+    expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/);
+    expect(html).toContain('data-title="Surveyor — test"');
   });
 });

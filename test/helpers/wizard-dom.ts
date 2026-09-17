@@ -31,6 +31,9 @@ class ElementStub {
   setAttribute(k: string, v: string): void {
     this.attrs[k] = v;
   }
+  getAttribute(k: string): string | null {
+    return Object.hasOwn(this.attrs, k) ? this.attrs[k] : null;
+  }
   append(...nodes: unknown[]): this {
     for (const n of nodes) {
       if (n instanceof ElementStub || n instanceof TextNode) {
@@ -57,9 +60,11 @@ class ElementStub {
 /** Run the driver with stubbed fetch and return the rendered app text. */
 export async function renderWizard(fetchImpl: WizardFetch): Promise<string> {
   const app = new ElementStub("main");
+  // The shell carries the title as a data attribute (no inline script, so
+  // the page honours script-src 'self'). Deliberately no APP_TITLE global:
+  // the driver must read it from the DOM, as it must in a real browser.
+  app.setAttribute("data-title", "Surveyor — test");
   const sandbox: Record<string, unknown> = {
-    APP_TITLE: "Surveyor — test",
-    LAMP: "off",
     document: {
       getElementById: (id: string) => (id === "app" ? app : null),
       createElement: (tag: string) => new ElementStub(tag),

@@ -30,15 +30,26 @@ code { font-family: 'Monaco', 'Courier New', monospace; }
 `;
 
 export function wizardShell(title: string, lamp: "on" | "off"): string {
-  const safeTitle = JSON.stringify(title);
-  const safeLamp = lamp === "on" ? "on" : "off";
+  void lamp;
+  // No inline script: the title travels as a data attribute (escaped) so
+  // the page honours script-src 'self' — the survey shell's rule. An inline
+  // <script> would be blocked by the CSP and the driver would die on its
+  // first reference, leaving a blank window.
   return `<!DOCTYPE html>
 <html lang="en-AU"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Surveyor Setup</title><style>${WIZARD_CSS}</style></head>
-<body><main class="os9-window" id="app"></main>
-<script>const APP_TITLE = ${safeTitle}; const LAMP = "${safeLamp}";</script>
+<body><main class="os9-window" id="app" data-title="${escAttr(title)}"></main>
 <script src="/wizard.js"></script></body></html>`;
+}
+
+/** Escape for an HTML attribute value. */
+function escAttr(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 export const WIZARD_JS = `
@@ -47,6 +58,9 @@ export const WIZARD_JS = `
 // memory only: the operator token, the transient CF OAuth token (arrives in
 // the URL fragment, never sent to the server), and provider keys.
 const app = document.getElementById("app");
+// Title arrives as a data attribute on #app (see wizardShell): the page
+// honours script-src 'self', so no inline script may define it.
+const APP_TITLE = app.getAttribute("data-title") || "Surveyor";
 let OP_TOKEN = "";
 let CF_TOKEN = "";
 function readFragment() {
