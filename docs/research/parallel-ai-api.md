@@ -227,7 +227,7 @@ One organisation-level API key created on `https://platform.parallel.ai`, passed
 
 ## 4. Terms of service and data handling
 
-Two documents matter: the **website** Terms of Use (`https://parallel.ai/terms-of-service`, "rules and restrictions that govern your use of our websites") and the **Customer Terms and Conditions** (`https://www.parallel.ai/customer-terms`), which govern API use. The FAQ links to the latter for API questions (`https://docs.parallel.ai/resources/faqs`). Section numbers below are from the Customer Terms.
+Two documents matter: the **website** Terms of Use (`https://parallel.ai/terms-of-service`, "rules and restrictions that govern your use of our websites") and the **Customer Terms and Conditions** (`https://www.parallel.ai/customer-terms`), which govern API use. The FAQ links to the latter for API questions (`https://docs.parallel.ai/resources/faqs`). Section numbers below are from the Customer Terms. The per-provider storage, caching and republication decisions drawn from these clauses are recorded in `docs/research/provider-terms-review.md` (draft for human legal sign-off).
 
 ### 4.1 Ownership and what you may do with output
 

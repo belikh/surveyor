@@ -8,6 +8,10 @@ investigation, a qualified Australian lawyer must review the specific facts
 (who the operator is, where the sources are, what is published, how recordings
 were obtained).
 
+**Companion**: the provider-by-provider storage, caching and republication
+decisions are in `docs/research/provider-terms-review.md` — a draft for human
+legal sign-off.
+
 **Scope**: an operator who is either an Australian journalist or a union,
 running a single workplace investigation; anonymous worker testimony; ingestion
 of workplace documents; an AI engine proposing research angles and drafting
@@ -544,7 +548,9 @@ without a human), APP 1.7 will require disclosure.
 ### 7.1 Implied features (AI)
 
 1. **Provider due diligence record**: model, provider, terms, training-on-data
-   posture, retention, jurisdiction, review date.
+   posture, retention, jurisdiction, review date. The storage, caching and
+   republication decisions per provider are drafted in
+   [`provider-terms-review.md`](provider-terms-review.md).
 2. **No-training / no-retention flags** surfaced at configuration time.
 3. **Automated decisions register** (APP 1.7) with policy text generation.
 4. **Output policing already present** — keep it; add "generated content about
@@ -582,7 +588,8 @@ Ranked by how much legal risk is reduced per unit of build effort.
    consent, or another APP 6/8 exception; obtain legal advice before relying on
    "substantially similar law".
 3. **Sign and assess processor terms** (Cloudflare and each BYOK provider) for
-   APP 8 purposes and record the assessment.
+   APP 8 purposes and record the assessment. The provider-terms decisions are
+   drafted in [`provider-terms-review.md`](provider-terms-review.md).
 4. **Set retention schedules** per data class and apply them (the software
    enforces, the operator decides).
 5. **Make NDB decisions and notifications** — assess, prepare the statement,
