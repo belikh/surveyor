@@ -18,6 +18,7 @@ import {
   resolveChain,
   validateCustomProvider,
 } from "./lib/registry";
+import { probeSearchKey, SEARCH_BASE_URLS } from "./lib/search";
 import {
   putWorkerSecret,
   deleteWorkerSecret,
@@ -48,7 +49,8 @@ import {
   bootstrapInstallation,
   BootstrapError,
 } from "./lib/bootstrap";
-import { liveClient, hasSecretValue } from "./lib/providers";
+import { liveClient, liveSearchClient, hasSecretValue } from "./lib/providers";
+import type { PassResult } from "./lib/pass";
 import { resolveEntityLinks } from "./lib/entities";
 import { isAllowedProviderBaseUrl } from "./lib/net";
 import {
@@ -471,13 +473,25 @@ app.post("/api/providers/validate", async (c) => {
 const KEY_BASE_URLS: Record<string, string> = {
   groq: "https://api.groq.com/openai/v1",
   tokenrouter: "https://api.tokenrouter.com/v1",
+  tavily: SEARCH_BASE_URLS.tavily,
+  parallel: SEARCH_BASE_URLS.parallel,
 };
+
+/** Search-provider kinds: probed on their own search endpoint (there is no
+ *  OpenAI-style /models call) and tagged search/extract whenever they land. */
+const SEARCH_KEY_KINDS: ReadonlySet<string> = new Set(["tavily", "parallel"]);
 
 const KeyEntrySchema = z.object({
   cf_token: z.string().min(1).max(4096),
   account_id: z.string().min(1).max(64),
   script_name: z.string().min(1).max(128),
-  kind: z.enum(["groq", "tokenrouter", "openai-compatible"]),
+  kind: z.enum([
+    "groq",
+    "tokenrouter",
+    "openai-compatible",
+    "tavily",
+    "parallel",
+  ]),
   label: z.string().min(1).max(64),
   model: z.string().min(1).max(128),
   base_url: z
@@ -487,6 +501,9 @@ const KeyEntrySchema = z.object({
     .refine(isAllowedProviderBaseUrl, "base URL must be https to a public host")
     .optional(),
   secret_slot: z.string().regex(SECRET_SLOT).refine(isProviderSlot, "not a provider key slot"),
+  /** Declared abilities captured with the key (ADR-0018): chat, vision,
+   *  search, extract, audio. Entries without a tag are chat entries. */
+  capabilities: z.array(z.string().min(1).max(32)).max(8).optional(),
   api_key: z.string().min(1).max(512),
 });
 
@@ -500,13 +517,17 @@ app.post("/api/providers/key", async (c) => {
     p.kind === "openai-compatible" ? p.base_url : KEY_BASE_URLS[p.kind];
   if (!baseUrl) return c.json({ error: "base_url_required" }, 422);
 
-  // 1. Prove the key works before storing it (reuses the save-time probe).
-  const check = await validateCustomProvider({
-    label: p.label,
-    baseUrl,
-    model: p.model,
-    apiKey: p.api_key,
-  });
+  // 1. Prove the key works before storing it. Search providers have no
+  //    /models probe; their key is proven on the search endpoint instead.
+  const check: { ok: true } | { ok: false; error: string } =
+    p.kind === "tavily" || p.kind === "parallel"
+      ? await probeSearchKey(p.kind, p.api_key)
+      : await validateCustomProvider({
+          label: p.label,
+          baseUrl,
+          model: p.model,
+          apiKey: p.api_key,
+        });
   if (!check.ok) {
     return c.json({ error: "provider_invalid", detail: check.error }, 422);
   }
@@ -528,12 +549,24 @@ app.post("/api/providers/key", async (c) => {
   // 3. Persist the entry (slot name only) so the chain can resolve it.
   const st = await getState(c.env);
   const current = await st.loadSetup();
+  // Search kinds carry search/extract by nature: a stray tag cannot route
+  // them into the chat chain, and an untagged entry still lands routed.
+  const capabilities = SEARCH_KEY_KINDS.has(p.kind)
+    ? (p.capabilities ?? []).filter(
+        (cap) => cap === "search" || cap === "extract",
+      )
+    : p.capabilities;
+  const storeCaps =
+    SEARCH_KEY_KINDS.has(p.kind) && (capabilities ?? []).length === 0
+      ? ["search", "extract"]
+      : capabilities;
   const entry = {
     kind: p.kind,
     label: p.label,
     secret_slot: p.secret_slot,
     model: p.model,
     ...(p.kind === "openai-compatible" ? { base_url: p.base_url } : {}),
+    ...(storeCaps && storeCaps.length > 0 ? { capabilities: storeCaps } : {}),
   };
   const providers = [
     ...current.providers.filter((x) => x.secret_slot !== p.secret_slot),
@@ -985,9 +1018,9 @@ export interface EngineParams {
   angle_id?: string;
 }
 
-/** Staged pipeline entrypoint: research-line bookkeeping and scheduled
- *  digests. Extraction/serving stays with the HTTP paths so steps remain
- *  resumable without duplicating provider calls.
+/** Staged pipeline entrypoint: research-line bookkeeping, the journalist
+ *  passes and scheduled digests. Extraction/serving stays with the HTTP
+ *  paths so steps remain resumable without duplicating provider calls.
  *
  *  The base class must be the runtime's own `WorkflowEntrypoint` (from
  *  `cloudflare:workers`), not a look-alike: workerd addresses this class as
@@ -1000,7 +1033,8 @@ export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
   ): Promise<void> {
     const env = this.env;
     const params = event.payload ?? {};
-    if (params.line_id) {
+    const lineId = params.line_id;
+    if (lineId) {
       await step.do("record-line-opened", async () => {
         const { recordTurn } = await import("./lib/telemetry");
         await recordTurn(env.DB, {
@@ -1009,13 +1043,64 @@ export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
           label: `line:${params.angle_id ?? "unknown"}`,
           outcome: "opened",
         });
-        return params.line_id;
+        return lineId;
       });
+      // The capped tool loop is one resumable step: the memo keeps a
+      // finished line from being researched (and billed) twice.
+      await step.do("research-line", async () => {
+        const st = await getState(env);
+        const client = await liveClient(env.DB, env);
+        const search = await liveSearchClient(env.DB, env);
+        const { buildWebToolbox, runResearchLine } = await import("./lib/research");
+        // Web tools exist only when a search provider is configured; the
+        // keyless floor stays corpus-only. Fetched pages become snapshots.
+        const web = search
+          ? buildWebToolbox(search, {
+              db: env.DB,
+              kit: st.kit,
+              r2: env.CORPUS,
+              ai: env.AI,
+              now: () => new Date(),
+            })
+          : null;
+        return runResearchLine(env.DB, st.kit, lineId, client, { web });
+      });
+    }
+    // Journalist passes (B12, ADR-0010): one resumable step per enabled
+    // report type, each with its own per-pass cap. Step memos hold every
+    // pass output, so a resumed workflow never pays for the same pass twice
+    // and the publish step below reuses what the pass step produced.
+    const passTargets = await step.do("journalist-pass-targets", async () => {
+      const { enabledReportTypes } = await import("./lib/schedule");
+      return enabledReportTypes(env.DB);
+    });
+    const passes = new Map<string, PassResult | null>();
+    for (const type of passTargets) {
+      const pass = await step.do(`journalist-pass:${type}`, async () => {
+        const st = await getState(env);
+        const client = await liveClient(env.DB, env);
+        if (!client) return null;
+        const { gatherEvidence } = await import("./lib/evidence");
+        const { reportRow } = await import("./lib/publish");
+        const { PASS_CAPS, runJournalistPass } = await import("./lib/pass");
+        const evidence = await gatherEvidence(env.DB);
+        const row = await reportRow(env.DB, type);
+        return runJournalistPass(
+          env.DB,
+          st.kit,
+          type,
+          client,
+          evidence,
+          !row.config.allow_uncited,
+          PASS_CAPS,
+        );
+      });
+      passes.set(type, pass);
     }
     await step.do("evaluate-report-frequencies", async () => {
       const st = await getState(env);
       const client = await liveClient(env.DB, env);
-      return evaluateAll(env.DB, st.kit, new Date().toISOString(), client);
+      return evaluateAll(env.DB, st.kit, new Date().toISOString(), client, passes);
     });
   }
 }

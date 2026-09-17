@@ -3,8 +3,9 @@
 // leave these stack frames (constitution II).
 
 import type { Bindings } from "../env";
-import { resolveChain, sanitiseStoredSetup } from "./registry";
+import { entriesForCapability, resolveChain, sanitiseStoredSetup } from "./registry";
 import { buildChainClient, type ModelClient } from "./serve";
+import { buildSearchClient, type SearchClient } from "./search";
 import { SetupStateSchema, isProviderSlot } from "./setup";
 
 export async function currentProviders(db: D1Database) {
@@ -51,4 +52,25 @@ export async function liveClient(
   );
   if (chain.entries.length === 0) return null;
   return buildChainClient(chain.entries, (slot) => secretValue(env, slot));
+}
+
+/** Resolve this installation's search chain (operator order, search-capable
+ *  entries only) or null when none is configured: callers degrade to the
+ *  deterministic floor rather than failing. */
+export async function liveSearchClient(
+  db: D1Database,
+  env: Bindings,
+): Promise<SearchClient | null> {
+  const chain = resolveChain(
+    {
+      phase: "ready",
+      providers: await currentProviders(db),
+      instrument: null,
+      installed_at: null,
+    },
+    (slot) => hasSecretValue(env, slot),
+  );
+  const entries = entriesForCapability(chain.entries, "search");
+  if (entries.length === 0) return null;
+  return buildSearchClient(entries, (slot) => secretValue(env, slot));
 }

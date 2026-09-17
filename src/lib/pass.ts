@@ -41,6 +41,15 @@ export type TimelineEntry = z.infer<typeof TimelineEntrySchema>;
 
 export const PASS_DOC_BUDGET = 6000;
 
+/** Per-pass spend cap (ADR-0010): provider-reported tokens for the one
+ *  model call a pass makes. A pass that reports more stops there; the
+ *  caller falls back to the deterministic render rather than buying more. */
+export interface PassCaps {
+  tokens: number;
+}
+
+export const PASS_CAPS: PassCaps = { tokens: 20_000 };
+
 export interface PassResult {
   /** Rendered prose for the non-snapshot types; null when unusable. */
   body: string | null;
@@ -99,9 +108,10 @@ function promptFor(type: string, evidence: Evidence, docs: Doc[]): string {
 }
 
 /**
- * Run one pass and render its prose. Returns null when the provider fails or
- * emits unusable output — the caller falls back to the deterministic render.
- * `strict` is publish mode: uncited claims are dropped rather than annotated.
+ * Run one pass and render its prose. Returns null when the provider fails,
+ * exceeds the per-pass cap, or emits unusable output — the caller falls back
+ * to the deterministic render. `strict` is publish mode: uncited claims are
+ * dropped rather than annotated.
  */
 export async function runJournalistPass(
   db: D1Database,
@@ -110,6 +120,7 @@ export async function runJournalistPass(
   client: ModelClient,
   evidence: Evidence,
   strict: boolean,
+  caps: PassCaps = PASS_CAPS,
 ): Promise<PassResult | null> {
   const rows = await db
     .prepare("SELECT id, text_envelope FROM corpus_docs WHERE status = 'parsed'")
@@ -121,14 +132,29 @@ export async function runJournalistPass(
   const byId = new Map(docs.map((d) => [d.id, d.text]));
 
   let raw: string;
+  let reported = 0;
   try {
-    raw = await client.complete(promptFor(type, evidence, docs));
+    raw = await client.complete(promptFor(type, evidence, docs), (usage) => {
+      reported += usage.tokens;
+    });
   } catch {
     await recordTurn(db, {
       tier: "deterministic-fallback",
       toolCalls: 0,
       label: `pass:${type}`,
       outcome: "provider-error",
+    });
+    return null;
+  }
+  // The cap is checked on the provider's own report: an over-cap pass halts
+  // gracefully — no prose is stored, the render falls back, and the record
+  // says the cap was hit.
+  if (reported > caps.tokens) {
+    await recordTurn(db, {
+      tier: client.tier,
+      toolCalls: 0,
+      label: `pass:${type}`,
+      outcome: "capped",
     });
     return null;
   }
@@ -164,15 +190,7 @@ export async function runJournalistPass(
     await storeEntries(db, kit, type, entries);
     if (entries.length === 0) return null;
     return {
-      body: entries
-        .map(
-          (e) =>
-            `- ${cap(e.date, 64)}: **${cap(e.label, 200)}** — ${e.paragraph}` +
-            (e.citations.length > 0
-              ? `\n  ${citeLine(e.citations)}`
-              : " [uncited]"),
-        )
-        .join("\n"),
+      body: renderTimelineEntries(entries),
       lead: null,
       tier: client.tier,
       uncited,
@@ -203,6 +221,53 @@ export async function runJournalistPass(
   }
   if (rendered.length === 0) return null;
   return { body: rendered.join("\n\n"), lead: null, tier: client.tier, uncited, dropped: 0 };
+}
+
+/** Deterministic render of structured timeline entries. */
+export function renderTimelineEntries(entries: TimelineEntry[]): string {
+  return entries
+    .map(
+      (e) =>
+        `- ${cap(e.date, 64)}: **${cap(e.label, 200)}** — ${e.paragraph}` +
+        (e.citations.length > 0
+          ? `\n  ${citeLine(e.citations)}`
+          : " [uncited]"),
+    )
+    .join("\n");
+}
+
+/** Read the stored structured timeline entries (the production read path). */
+export async function readTimelineEntries(
+  db: D1Database,
+  kit: VaultKit,
+): Promise<TimelineEntry[]> {
+  const rows = await db
+    .prepare(
+      "SELECT entry_envelope FROM report_entries WHERE report_type = 'timeline' ORDER BY position ASC",
+    )
+    .all<{ entry_envelope: string }>();
+  const entries: TimelineEntry[] = [];
+  for (const row of unwrap(rows)) {
+    try {
+      const parsed = TimelineEntrySchema.safeParse(
+        JSON.parse(await openText(kit, row.entry_envelope)),
+      );
+      if (parsed.success) entries.push(parsed.data);
+    } catch {
+      // An unreadable row is skipped rather than failing the render.
+    }
+  }
+  return entries;
+}
+
+/** Render the stored timeline entries, or null when none are stored so the
+ *  caller can fall back to the deterministic evidence render. */
+export async function renderStoredTimeline(
+  db: D1Database,
+  kit: VaultKit,
+): Promise<string | null> {
+  const entries = await readTimelineEntries(db, kit);
+  return entries.length === 0 ? null : renderTimelineEntries(entries);
 }
 
 /** Replace this type's stored entries with the pass output (sealed). */

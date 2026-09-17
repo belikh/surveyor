@@ -211,13 +211,17 @@ describe("full journey", () => {
     ).json()) as { id: string };
     const docs = (await (
       await callApp(env, "/api/corpus", { headers: auth })
-    ).json()) as { docs: Array<{ id: string }> };
+    ).json()) as { docs: Array<{ id: string; filename: string }> };
+    // Cite the mirrored text document by name: the held scan is not in the
+    // mirror and cannot carry a citation (B3).
+    const notes = docs.docs.find((d) => d.filename === "notes.txt");
+    if (!notes) throw new Error("notes.txt missing from corpus");
     const done = (await (
       await callApp(env, `/api/engine/lines/${line.id}/complete`, {
         method: "POST",
         headers: auth,
         body: JSON.stringify({
-          citations: [{ doc_id: docs.docs[0].id, snippet: "late" }],
+          citations: [{ doc_id: notes.id, snippet: "late" }],
           findings: "Rosters run late",
         }),
       })

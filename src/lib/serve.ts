@@ -19,9 +19,18 @@ import {
 import { isAllowedProviderBaseUrl } from "./net";
 import { entriesForCapability } from "./registry";
 
+/** Usage the provider reported for one model call. Spend is metered from
+ *  this, never estimated: a client that reports nothing consumes nothing. */
+export interface ModelUsage {
+  tokens: number;
+}
+
 export interface ModelClient {
   tier: string;
-  complete(prompt: string): Promise<string>;
+  complete(
+    prompt: string,
+    onUsage?: (usage: ModelUsage) => void,
+  ): Promise<string>;
   /** Send an image through a vision-capable entry (tagged in the registry). */
   completeVision?(prompt: string, imageBase64: string, mediaType: string): Promise<string>;
 }
@@ -267,13 +276,20 @@ export function buildChainClient(
 
   return {
     tier: chatEntries.map((e) => e.label).join("+") || "chain",
-    complete: (prompt: string): Promise<string> =>
+    complete: (
+      prompt: string,
+      onUsage?: (usage: ModelUsage) => void,
+    ): Promise<string> =>
       run(chatEntries, async (provider, e) => {
-        const { text } = await generateText({
+        const { text, usage } = await generateText({
           model: provider.chatModel(e.model),
           prompt,
           maxRetries: 0,
         });
+        const tokens =
+          usage.totalTokens ??
+          (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0);
+        onUsage?.({ tokens });
         return text;
       }),
     completeVision: (

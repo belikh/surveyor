@@ -12,7 +12,12 @@ import {
 } from "./reports";
 import { gatherEvidence } from "./evidence";
 import { injectionFlags } from "./engine";
-import { runJournalistPass } from "./pass";
+import {
+  PASS_CAPS,
+  renderStoredTimeline,
+  runJournalistPass,
+  type PassResult,
+} from "./pass";
 import { recordTurn } from "./telemetry";
 import { LegalGateUnmet, legalGateStatus, pendingVersion } from "./legal";
 import type { ModelClient } from "./serve";
@@ -48,6 +53,11 @@ export class ReportDisabled extends Error {
     this.name = "ReportDisabled";
   }
 }
+
+/** Memoised pass outputs from the Workflow's per-type steps (B12): a cached
+ *  null means the pass already ran and produced nothing usable (capped or
+ *  unusable output), so publish must not buy a second call. */
+export type PassCache = Map<string, PassResult | null>;
 
 function toReportRow(row: Record<string, string | number | null>): ReportRow {
   // Stored config is operator input: parse, never cast.
@@ -98,6 +108,7 @@ export async function publishReportVersion(
   type: ReportType,
   banner?: string,
   client?: ModelClient | null,
+  passes?: PassCache,
 ): Promise<{ version: number }> {
   const row = await reportRow(db, type);
   if (!row.enabled) throw new ReportDisabled();
@@ -117,17 +128,23 @@ export async function publishReportVersion(
   const deterministic = RENDERERS[type](evidence);
   let body = deterministic.body;
   if (client) {
-    // Journalist pass (R7): model prose when a provider is configured; the
-    // deterministic render is the fallback. Publish strips uncited claims
-    // unless the operator approved them.
-    const pass = await runJournalistPass(
-      db,
-      kit,
-      type,
-      client,
-      evidence,
-      !row.config.allow_uncited,
-    );
+    // Journalist pass (R7/B12): the Workflow's memoised pass output is
+    // reused as-is; only an absent cache entry runs the pass inline (the
+    // manual publish path). A cached null — capped or unusable — falls back
+    // to the deterministic render without another model call.
+    const cached = passes?.get(type);
+    const pass =
+      cached === undefined
+        ? await runJournalistPass(
+            db,
+            kit,
+            type,
+            client,
+            evidence,
+            !row.config.allow_uncited,
+            PASS_CAPS,
+          )
+        : cached;
     // The model-authored prose is untrusted output: it gets the same
     // injection review as line findings before it can reach a version. A
     // flagged swap falls back to the deterministic body, which is built
@@ -146,6 +163,13 @@ export async function publishReportVersion(
     } else if (pass?.body) {
       body = pass.body;
     }
+  }
+  // Timeline (ADR-0010): stored structured entries are the report's source
+  // of truth and render deterministically, so a re-render cannot rewrite
+  // the operator's edited entries.
+  if (type === "timeline") {
+    const stored = await renderStoredTimeline(db, kit);
+    if (stored !== null) body = stored;
   }
   const withBanner = banner ? `${banner}\n\n${body}` : body;
 
