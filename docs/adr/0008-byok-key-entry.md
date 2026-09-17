@@ -2,7 +2,7 @@
 
 **Status**: Accepted (implemented 2026-09-16; amended by ADR-0013; live trial pending)
 
-**Deciders**: operator (user), via remediation R2 (#26)
+**Deciders**: operator (user), via remediation R2
 
 ## Context
 
@@ -68,6 +68,6 @@ telemetered, returned, or reachable from D1 (asserted by test).
 
 ## References
 
-- Remediation: R2 (#26)
+- Remediation: R2
 - Related: ADR-0001 (tenancy/BYOK), ADR-0005 (installer), ADR-0007 (AI SDK)
 - Tests: `surveyor/test/keyentry.test.ts`, `surveyor/test/oauth.test.ts`

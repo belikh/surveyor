@@ -11,8 +11,8 @@ must be immediately usable on social channels, regenerable when the URL rotates,
 and must never expose the operator. A cheap concrete prototype (a stub pack in
 the live predecessor shape) was used to raise fidelity and reacted to.
 
-Primary source: `.scratch/cloudflare-native/issues/t06-launch-pack.md` and
-`.scratch/cloudflare-native/prototype-launch-pack.md`.
+Primary source: the pre-split wayfinder `t06-launch-pack` ticket and its
+prototype (not carried into this repository).
 
 ## Decision
 
@@ -49,5 +49,6 @@ tracking vectors, operator-supplied forbidden terms, and banned claim phrases.
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t06-launch-pack.md`
-- Prototype: `.scratch/cloudflare-native/prototype-launch-pack.md`
+- Wayfinder ticket: `t06-launch-pack` (pre-split; not carried into this
+  repository)
+- Prototype: pre-split wayfinder prototype (not carried into this repository)

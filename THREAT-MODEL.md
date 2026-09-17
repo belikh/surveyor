@@ -170,7 +170,8 @@ bucket** until drained.
 A submitter-attached document transits the Worker into a private R2 key and
 stays there, **unencrypted**, until the lane extracts its text (success deletes
 it; failure keeps it for a bounded 24 h retry). This is the user-approved
-Principle I exception (ADR-0012, plan.md Complexity Tracking).
+Principle I exception (ADR-0012; the Complexity Tracking record is pre-split
+and not carried into this repository).
 
 - **Mitigations**: private bucket bound to one installation; the key is a
   random id; the raw is never sent to a text prompt or logged; the gate runs on

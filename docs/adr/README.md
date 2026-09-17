@@ -1,8 +1,11 @@
 # Architecture Decision Records
 
 Decisions that shape the investigation platform (the `surveyor/` installation).
-The platform inherits this repository's constitution
-(`.specify/memory/constitution.md`).
+The platform follows this repository's stated principles — source protection
+first, secrets never in transcripts, untrusted data treated as data,
+library-first, test-verified security, minimal identity surface, bounded
+agency, honest threat modelling, corpus purity, Australian English
+(`README.md` §Principles, `CONTRIBUTING.md`).
 
 | ADR | Decision | Source |
 |---|---|---|
@@ -20,24 +23,59 @@ The platform inherits this repository's constitution
 | [0012](0012-submitter-file-uploads.md) | Submitter file uploads; controlled Principle I exception; private transcript R2, deleted after OCR | operator decision |
 | [0013](0013-oauth-pkce.md) | OAuth client switches to PKCE (amends 0008); no embedded secret | remediation R2 follow-up |
 | [0014](0014-licence-and-repository-split.md) | AGPL-3.0; new public repo with squashed history; publication is a human step | remediation R8 |
+| [0015](0015-automation-stance.md) | Autonomous upstream, human publish: angles auto-approve unless flagged, lines complete within caps, publication is always an operator act | campaign #1 |
+| [0016](0016-anonymity-deviation.md) | Anonymity deviation: TLS in transit and sealing at rest; no Tor, no source-side end-to-end encryption | campaign #1 |
+| [0017](0017-web-research-and-snapshot-provenance.md) | Web research: the immutable R2 snapshot is the evidence, never the live URL | campaign #1; B7 (#25) |
+| [0018](0018-providers-are-leads-not-evidence.md) | Capability-tagged providers; their output is leads to re-fetch, never evidence | campaign #1; B4 (#22), B6 (#24) |
+| [0019](0019-compliance-posture.md) | Operator is the data controller; controls, instrument templates and receipts; no certification claims | campaign #1; D-series |
 
-The raw wayfinder map and tickets live in `.scratch/cloudflare-native/`. Two
-research files underpin these decisions:
-`.scratch/cloudflare-native/research/installer-mechanism.md` and
-`.scratch/cloudflare-native/research/corpus-ocr-pipeline.md`.
+**Provenance note.** The `wayfinder` tickets and `remediation` IDs named in the
+early ADRs (`t01-…`, `R2 (#26)`, and so on) are from the pre-split planning
+repository. They are historical identifiers, not paths and not issue numbers in
+this repository. The research reports underpinning the campaign ADRs live in
+`docs/research/`: the architecture audit, the competitor landscape, web-research
+integration, the Parallel API review, the Australian legal compliance report,
+and the audio transcription options.
 
 ## Known deviations from these decisions
 
-Fresh-eyes review (2026-09-16) found the implementation does not yet deliver
-several decisions. The remediation issues track them:
+The campaign build (#1) is in flight; this list records where the code still
+falls short of a decision, with the owning ticket. Where a ticket is closed, the
+fix is on its stream branch and lands when the campaign merges.
 
-- **0001** — no runtime code path accepts a provider key (R2 #26) — **resolved**
-  by ADR-0008; AI SDK registry implemented by ADR-0007.
-- **0002** — OCR lane pastes base64 into a text prompt; no vision, no `env.AI`
-  (R6 #29).
-- **0003** — submission rounds are static; retrigger is manual, the judge never
-  auto-invokes (R4 #28).
-- **0004** — the "journalist pass" does not exist; reports are deterministic
-  templates (R7 #30).
-- **0005** — provision/teardown are test-only, with no runtime caller (R3 #27)
-  — **resolved** by ADR-0009.
+- **0002 / 0011** — the digital-document lanes drain through
+  `env.AI.toMarkdown` plus vision OCR; native PDF/DOCX/XLSX/PPTX parsing is
+  C1 (#32) and C2 (#33); the browser rasterisation path ships with the served
+  PDF.js worker asset (A5, #6). The wizard does not yet ask for capability tags
+  (B5, #23). The two-page multi-modal rescue is not built (superseded by
+  ADR-0011).
+- **0002 / 0012** — uploads buffer rather than stream: submitter attachments
+  call `arrayBuffer()` (A14, #15) and corpus uploads arrive as base64 JSON
+  bodies (A15, #16).
+- **0003** — research lines exist with citation validation and spend caps but do
+  not research autonomously; a line completes through the operator's findings
+  POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding
+  completion B3 (#21). Angles default to the deterministic proposer; LLM
+  proposal is opt-in `mode: "live"`. A corpus upload does not retrigger
+  (unclaimed).
+- **0004 / 0010** — the journalist pass runs inline in the publish path, has no
+  per-pass cap, and falls back to the deterministic render rather than Workers
+  AI (B12, #30). The automatic-publish branch still renders due reports when
+  stored gates are met; ADR-0015 retires it and records gates as advisory, and
+  that code change is not yet claimed by a ticket.
+- **0005 / 0009** — provision and teardown have routes and receipts but have not
+  been exercised against a live Cloudflare account (A16, #17; A17, #18), and
+  re-provisioning is not yet non-destructive (A2, #3).
+- **0012** — the raw-byte deletion window is enforced by the scheduled sweep
+  (A3, #4); streamed uploads are outstanding (A14, #15).
+- **0015** — angles still queue for explicit approval rather than
+  auto-approving unless flagged (B-series engine build, #19–#21), and it is the
+  scheduled digest that still auto-publishes where gates are met (see 0004).
+- **0017 / 0018** — the snapshot store and web-citation validation are B7
+  (#25); fetched-text delimiters and injection flagging are B8 (#26); the
+  Tavily/Parallel search layer is B6 (#24); provider-terms review is B10 (#27).
+- **0019** — the retention and deletion engine is D1 (#44) and D2 (#45); the
+  breach workflow is D3 (#46); notices are D4 (#47); consent is D5 (#48);
+  residency receipts are D6 (#49); the legal publish gate is D7 (#50); the
+  quality-evidence artefacts that gate the public claim are D8 (#51), D9 (#52),
+  D10 (#53) and D11 (#54).

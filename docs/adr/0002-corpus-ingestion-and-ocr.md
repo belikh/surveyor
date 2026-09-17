@@ -13,9 +13,9 @@ Worker: 128 MB isolate memory (shared across concurrent requests on the
 isolate), 100 MB request body, and a per-request CPU budget measured in
 milliseconds on the Free plan.
 
-Primary sources: `.scratch/cloudflare-native/research/corpus-ocr-pipeline.md`
-(§1 limits table, §3 native lane, §4 OCR lane, §5 rescue lane, §6 caps, §8 gate
-placement), which cite developers.cloudflare.com directly.
+Primary source: the pre-split wayfinder corpus-OCR research (§1 limits table,
+§3 native lane, §4 OCR lane, §5 rescue lane, §6 caps, §8 gate placement; not
+carried into this repository), which cites developers.cloudflare.com directly.
 
 ## Decision
 
@@ -27,8 +27,10 @@ asynchronously in a Queue consumer (15-minute wall time) or Workflow step.
 for PDFs, `mammoth` for DOCX, SheetJS for XLSX, a JSZip text-run walk for PPTX,
 direct decode for TXT/MD/CSV). Scanned PDFs and images go through **vision OCR
 page-at-a-time**. The hardest material (garbled OCR, handwriting, dense tables)
-gets a **multi-modal rescue capped at two pages per file**, after which the file
-stays flagged for the journalist.
+gets a **multi-modal rescue capped at two pages per file** (superseded by
+ADR-0011: the rescue lane is not built; scans rasterise in the browser and OCR
+page-at-a-time instead — see the amendment below), after which the file stays
+flagged for the journalist.
 
 **The name-leak gate sits before the mirror.** `R2 bytes → lane parser/OCR →
 name-leak gate (quarantine + pseudonymise, same semantics as the submission
@@ -65,6 +67,12 @@ what it did not.
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t03-corpus-ocr.md`
-- Research: `.scratch/cloudflare-native/research/corpus-ocr-pipeline.md`
-- Remediation against the current build: R6 (#29)
+- Wayfinder ticket: `t03-corpus-ocr` (pre-split; not carried into this
+  repository)
+- Research: pre-split wayfinder corpus-OCR report (not carried into this
+  repository)
+- Remediation against the current build: R6
+- **Amendment (2026-09-17)**: the two-page multi-modal rescue is superseded by
+  ADR-0011 but not built; scans are rasterised in the browser and OCR'd
+  page-at-a-time, and the open PDF page-to-image unknown is answered by
+  ADR-0011.

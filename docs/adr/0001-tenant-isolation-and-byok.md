@@ -22,9 +22,9 @@ Separately, the LLM layer needed a model. The inherited predecessor used a fixed
 chain (Groq → TokenRouter → Workers AI). The operator asked for a registry that
 covers all providers and allows N custom entries.
 
-Primary sources: `.scratch/cloudflare-native/research/installer-mechanism.md`
-(§2 for Workers for Platforms and its $25/month gate; §3–§4 for the API-token
-provisioning path it recommends instead).
+Primary source: the pre-split wayfinder installer research (§2 for Workers for
+Platforms and its $25/month gate; §3–§4 for the API-token provisioning path it
+recommends instead). That report is not carried into this repository.
 
 ## Decision
 
@@ -69,5 +69,7 @@ never enter the installation's own state, logs, or a model.
 
 ## References
 
-- Wayfinder ticket: `.scratch/cloudflare-native/issues/t01-tenant-byok.md`
-- Research: `.scratch/cloudflare-native/research/installer-mechanism.md` §2, §4
+- Wayfinder ticket: `t01-tenant-byok` (pre-split; not carried into this
+  repository)
+- Research: pre-split wayfinder installer report §2, §4 (not carried into this
+  repository)

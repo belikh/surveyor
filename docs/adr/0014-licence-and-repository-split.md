@@ -2,7 +2,7 @@
 
 **Status**: Accepted (2026-09-16); publication is a human step
 
-**Deciders**: operator (user), remediation R8 (#31)
+**Deciders**: operator (user), remediation R8
 
 ## Context
 
@@ -56,5 +56,5 @@ touching the platform, with `npm run smoke:runtime` weekly. `CONTRIBUTING.md`,
 
 ## References
 
-- Remediation: R8 (#31); spec FR-041–FR-044
+- Remediation: R8; spec FR-041–FR-044
 - Related: ADR-0013 (PKCE OAuth client)
