@@ -245,3 +245,171 @@ export function buildDocx(
   }
   return buildZip(entries);
 }
+
+/* --------------------------------- XLSX --------------------------------- */
+
+export interface XlsxSheet {
+  name: string;
+  rows: Array<Array<string | number>>;
+}
+
+const XML_ESCAPES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+};
+
+function xmlEscape(text: string): string {
+  return text.replace(/[&<>"]/g, (ch) => XML_ESCAPES[ch]);
+}
+
+/**
+ * Minimal but valid XLSX: workbook, rels, shared strings and one worksheet
+ * per sheet. String cells alternate shared/inline so both read paths are
+ * exercised; numbers go in `<v>`.
+ */
+export function buildXlsx(
+  sheets: XlsxSheet[],
+  options: { deflate?: boolean } = {},
+): Uint8Array {
+  const shared: string[] = [];
+  const sharedIndex = new Map<string, number>();
+  let stringCount = 0;
+
+  const sheetXml = (sheet: XlsxSheet): string => {
+    const rows = sheet.rows
+      .map((row, r) => {
+        const cells = row
+          .map((value) => {
+            if (typeof value === "number") return `<c><v>${value}</v></c>`;
+            stringCount++;
+            if (stringCount % 2 === 0) {
+              return `<c t="inlineStr"><is><t>${xmlEscape(value)}</t></is></c>`;
+            }
+            let index = sharedIndex.get(value);
+            if (index === undefined) {
+              index = shared.length;
+              shared.push(value);
+              sharedIndex.set(value, index);
+            }
+            return `<c t="s"><v>${index}</v></c>`;
+          })
+          .join("");
+        return `<row r="${r + 1}">${cells}</row>`;
+      })
+      .join("");
+    return `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rows}</sheetData></worksheet>`;
+  };
+
+  const workbook =
+    '<?xml version="1.0"?>' +
+    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+    sheets
+      .map(
+        (s, i) =>
+          `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`,
+      )
+      .join("") +
+    "</sheets></workbook>";
+
+  const rels =
+    '<?xml version="1.0"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    sheets
+      .map(
+        (_, i) =>
+          `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+      )
+      .join("") +
+    "</Relationships>";
+
+  const entries: ZipInput[] = [
+    { name: "[Content_Types].xml", data: DOCX_CONTENT_TYPES },
+    { name: "xl/workbook.xml", data: workbook },
+    { name: "xl/_rels/workbook.xml.rels", data: rels },
+  ];
+  sheets.forEach((sheet, i) => {
+    entries.push({
+      name: `xl/worksheets/sheet${i + 1}.xml`,
+      data: sheetXml(sheet),
+      deflate: options.deflate ?? true,
+    });
+  });
+  if (stringCount > 0) {
+    entries.push({
+      name: "xl/sharedStrings.xml",
+      data:
+        `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${stringCount}" uniqueCount="${shared.length}">` +
+        shared.map((s) => `<si><t>${xmlEscape(s)}</t></si>`).join("") +
+        "</sst>",
+      deflate: true,
+    });
+  }
+  return buildZip(entries);
+}
+
+/* --------------------------------- PPTX --------------------------------- */
+
+export interface PptxSlide {
+  title: string;
+  bullets?: string[];
+  table?: string[][];
+}
+
+function pptxShape(paragraphs: string[]): string {
+  return (
+    "<p:sp><p:txBody><a:bodyPr/>" +
+    paragraphs
+      .map((text) => `<a:p><a:r><a:t>${xmlEscape(text)}</a:t></a:r></a:p>`)
+      .join("") +
+    "</p:txBody></p:sp>"
+  );
+}
+
+function pptxTable(rows: string[][]): string {
+  return (
+    "<p:graphicFrame><a:tbl>" +
+    rows
+      .map(
+        (row) =>
+          "<a:tr>" +
+          row
+            .map(
+              (cell) =>
+                `<a:tc><a:txBody><a:p><a:r><a:t>${xmlEscape(cell)}</a:t></a:r></a:p></a:txBody></a:tc>`,
+            )
+            .join("") +
+          "</a:tr>",
+      )
+      .join("") +
+    "</a:tbl></p:graphicFrame>"
+  );
+}
+
+export function buildPptx(
+  slides: PptxSlide[],
+  options: { deflate?: boolean } = {},
+): Uint8Array {
+  const entries: ZipInput[] = [
+    { name: "[Content_Types].xml", data: DOCX_CONTENT_TYPES },
+  ];
+  slides.forEach((slide, i) => {
+    const body = [
+      pptxShape([slide.title]),
+      ...(slide.bullets ?? []).map((b) => pptxShape([b])),
+      ...(slide.table ? [pptxTable(slide.table)] : []),
+    ].join("");
+    entries.push({
+      name: `ppt/slides/slide${i + 1}.xml`,
+      data:
+        '<?xml version="1.0"?>' +
+        '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ' +
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+        `<p:cSld><p:spTree>${body}</p:spTree></p:cSld></p:sld>`,
+      deflate: options.deflate ?? true,
+    });
+  });
+  return buildZip(entries);
+}

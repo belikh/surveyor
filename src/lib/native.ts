@@ -2,7 +2,7 @@
 // pass, per ADR-0002/ADR-0011. Returns null when the format or the bytes
 // fall outside the native subset, so the lane falls back to the model.
 
-import { extractDocxText } from "./ooxml";
+import { extractDocxText, extractPptxText, extractXlsxText } from "./ooxml";
 import { extractPdfText } from "./pdf";
 
 export interface NativeText {
@@ -13,6 +13,8 @@ export interface NativeText {
 export const NATIVE_TIERS: Record<string, string> = {
   "held-pdf": "native-pdf",
   "held-docx": "native-docx",
+  "held-xlsx": "native-xlsx",
+  "held-pptx": "native-pptx",
 };
 
 /**
@@ -32,6 +34,12 @@ export async function extractNativeText(
         break;
       case "held-docx":
         text = await extractDocxText(bytes);
+        break;
+      case "held-xlsx":
+        text = await extractXlsxText(bytes);
+        break;
+      case "held-pptx":
+        text = await extractPptxText(bytes);
         break;
       default:
         return null;
