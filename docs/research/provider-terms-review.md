@@ -257,7 +257,7 @@ Cross-cutting:
 | Date | |
 | Decision | ☐ approve as drafted ☐ approve with conditions ☐ reject |
 | Conditions / amendments | |
-| Parallel §3.4 conditions met (DPA etc.) | ☐ yes ☐ no |
+| Parallel §2.4 conditions met (DPA etc.) | ☐ yes ☐ no |
 | Tavily §3.3 conditions met | ☐ yes ☐ no |
 | May #28 (B9) proceed? | ☐ yes ☐ no |
 | Notes | |
