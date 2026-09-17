@@ -10,7 +10,7 @@ compatibility_date = "2026-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "surveyor-db"
-database_id = "cbded109-8dfa-4258-a0ed-f859d1fa5e3a"
+database_id = "REPLACE_VIA_PROVISIONING"
 
 # Corpus object store: held-doc raw bytes live here until drained.
 [[r2_buckets]]
