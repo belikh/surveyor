@@ -10,3 +10,4 @@ niro/state/
 niro/findings/
 niro/harness/run/
 niro/artifacts/
+.env.live-trial

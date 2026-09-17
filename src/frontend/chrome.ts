@@ -79,7 +79,7 @@ function frame(title, lamp, body) {
     el("section", { class: "os9-window" },
       el("div", { class: "os9-titlebar" },
         el("span", { class: "os9-lamp " + lamp }), title),
-      el("div", { class: "os9-body" }, body)));
+      el("div", { class: "os9-body" }, ...body)));
 }
 function tokenPanel() {
   const t = el("input", { type: "password", placeholder: "Operator token (chosen at boot)" });
@@ -219,7 +219,18 @@ function instrumentPanel() {
   return el("div", { class: "os9-panel" }, t, b, c, finish, note);
 }
 async function render() {
-  const st = await api("/api/setup");
+  // A fresh install has no key material, so /api/setup answers 503
+  // (not_provisioned). The wizard must still render — the boot panel is the
+  // whole point of this screen — so an unreadable setup falls back to the
+  // welcome phase and the status call below decides what the operator sees.
+  let st = null;
+  let setupError = "";
+  try {
+    st = await api("/api/setup");
+  } catch (e) {
+    setupError = e.message || "setup unreadable";
+    st = { phase: "welcome", instrument: null, installed_at: null };
+  }
   const status = await api("/api/status").catch(() => null);
   const steps = ["welcome", "providers", "corpus", "instrument", "ready"];
   const at = steps.indexOf(st.phase);
@@ -227,6 +238,16 @@ async function render() {
   body.push(el("h1", {}, APP_TITLE));
   if (status && status.degraded && status.warning) {
     body.push(el("div", { class: "os9-panel", role: "status" }, status.warning));
+  }
+  if (setupError && status && status.provisioned !== false) {
+    // Provisioned but the setup state cannot be read: say so plainly
+    // instead of misrendering the boot panel over a live installation.
+    body.push(el("div", { class: "os9-panel" },
+      el("strong", {}, "Setup state unreadable"),
+      el("p", {}, "The setup endpoint answered: " + setupError),
+      el("div", {}, el("button", { class: "os9-btn", onclick: () => render() }, "Retry"))));
+    frame("Surveyor Setup", "off", body);
+    return;
   }
   body.push(el("div", { class: "os9-progress", "aria-label": "setup progress" },
     el("div", { style: "width:" + ((at) * 25) + "%" })));
