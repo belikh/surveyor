@@ -901,10 +901,15 @@ function reportPanel(t) {
     el("label", {}, uncited, " allow uncited claims"),
     el("div", { class: "os9-row" }, saveCfg), cfgNote));
 
+  const approveNote = warn("");
   const approve = btn("Record approval", async () => {
     if (!confirm("Record the operator approval for " + t.type + "?")) return;
-    try { await api("/api/reports/" + t.type + "/approve", { method: "POST" }); render(); }
-    catch (e) { alert("Failed: " + errorText(e)); }
+    // Acknowledge in place rather than re-rendering: a re-render mid-form
+    // would discard whatever the operator had typed in the gates below.
+    try {
+      await api("/api/reports/" + t.type + "/approve", { method: "POST" });
+      approveNote.textContent = "Approval recorded.";
+    } catch (e) { approveNote.textContent = "Failed: " + errorText(e); }
   });
   approve.setAttribute("data-action", "report-approve");
   approve.setAttribute("data-type", t.type);
@@ -925,7 +930,7 @@ function reportPanel(t) {
   publish.setAttribute("data-type", t.type);
   details.append(panel(strong("Draft and publish"),
     warn("Publication is a human act. The gate must pass first: " + (t.gates.ok ? "gates are open." : t.gates.unmet.join(", ") + " unmet.")),
-    el("div", { class: "os9-row" }, approve, draft, publish), draftNote, draftBody));
+    el("div", { class: "os9-row" }, approve, draft, publish), approveNote, draftNote, draftBody));
 
   const reviewer = input("Reviewer (who reviewed)");
   reviewer.setAttribute("data-field", "legal-reviewer");

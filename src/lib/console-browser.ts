@@ -258,6 +258,9 @@ export async function runConsoleBrowserCheck(
       // review, one right-of-reply attempt — then publish for real.
       dialogs.length = 0;
       await actions.click('[data-action="report-approve"][data-type="briefing"]');
+      // Wait for the in-place acknowledgement before touching the gates
+      // below: the approval must be recorded, not just clicked.
+      await waitForText(actions, "#app", "Approval recorded", 15_000);
       await actions.fill(
         '[data-field="legal-reviewer"][data-type="briefing"]',
         "Console check",
