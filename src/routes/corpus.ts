@@ -225,7 +225,7 @@ export async function drainDocById(
   const r = results[0];
   if (!r) return { status: "ignored", reason: "no handler for lane" };
 
-  if (["parsed", "OCRed", "rescued"].includes(r.outcome.status)) {
+  if (["parsed", "OCRed", "rescued", "transcribed"].includes(r.outcome.status)) {
     const sealedNames = await Promise.all(
       r.outcome.hits.map(async (h, i) => ({
         label: `[corpus-name ${i + 1}]`,
@@ -294,7 +294,7 @@ corpus.post("/drain", async (c) => {
   }
   return c.json({
     drained: outcomes.filter((o) =>
-      ["parsed", "OCRed", "rescued"].includes(o.status),
+      ["parsed", "OCRed", "rescued", "transcribed"].includes(o.status),
     ).length,
     outcomes,
   });

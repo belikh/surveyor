@@ -23,6 +23,8 @@ export type Lane =
   | "held-email"
   | "held-archive"
   | "held-ocr"
+  | "held-audio"
+  | "held-video"
   | "rejected";
 
 export interface LaneDecision {
@@ -102,6 +104,39 @@ export function classifyLane(
     mime.startsWith("image/")
   ) {
     return { lane: "held-ocr", reason: "vision OCR needs the model pass" };
+  }
+  // Audio and video: the transcription lane (C6). The model family is the
+  // documented Whisper input set; an unreadable container still fails on
+  // drain with the chunk named, never silently.
+  if (
+    [
+      ".mp3",
+      ".mpga",
+      ".m4a",
+      ".wav",
+      ".aac",
+      ".flac",
+      ".ogg",
+      ".oga",
+      ".opus",
+    ].includes(extension) ||
+    mime.startsWith("audio/")
+  ) {
+    return {
+      lane: "held-audio",
+      reason: "transcription needs the Workers AI model pass",
+    };
+  }
+  if (
+    [".mp4", ".mov", ".webm", ".mkv", ".avi", ".mpeg", ".mpg"].includes(
+      extension,
+    ) ||
+    mime.startsWith("video/")
+  ) {
+    return {
+      lane: "held-video",
+      reason: "transcription needs the Workers AI model pass",
+    };
   }
   return { lane: "rejected", reason: `unsupported type ${extension || mime}` };
 }

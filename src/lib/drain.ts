@@ -8,6 +8,7 @@ import { gateCorpusText } from "./ingest";
 import type { QuarantineHit } from "./intake";
 import { extractNativeText } from "./native";
 import type { ModelClient } from "./serve";
+import { transcribeMedia } from "./transcribe";
 
 export interface HeldDoc {
   id: string;
@@ -21,7 +22,7 @@ export interface HeldDoc {
 export interface DrainStep {
   id: string;
   lane: string;
-  handler: "document" | "vision" | "slides" | "sheets";
+  handler: "document" | "vision" | "slides" | "sheets" | "transcribe";
 }
 
 const CAPABILITY: Record<DrainStep["handler"], string> = {
@@ -29,6 +30,7 @@ const CAPABILITY: Record<DrainStep["handler"], string> = {
   vision: "image OCR (vision)",
   slides: "slide text extraction",
   sheets: "spreadsheet text extraction",
+  transcribe: "audio transcription",
 };
 
 const LANE_HANDLERS: Record<string, DrainStep["handler"] | undefined> = {
@@ -39,6 +41,8 @@ const LANE_HANDLERS: Record<string, DrainStep["handler"] | undefined> = {
   "held-email": "document",
   "held-archive": "document",
   "held-ocr": "vision",
+  "held-audio": "transcribe",
+  "held-video": "transcribe",
 };
 
 /** Determine the drain order: held docs only, each with its handler. */
@@ -50,12 +54,17 @@ export function drainPlan(docs: HeldDoc[]): DrainStep[] {
 }
 
 export type LaneResult =
-  | { ok: true; text: string; tier: string; status?: "parsed" | "OCRed" | "rescued" }
+  | {
+      ok: true;
+      text: string;
+      tier: string;
+      status?: "parsed" | "OCRed" | "rescued" | "transcribed";
+    }
   | { ok: false; reason: string; tier: string };
 
 export interface DrainOutcome {
   id: string;
-  status: "parsed" | "OCRed" | "rescued" | "held";
+  status: "parsed" | "OCRed" | "rescued" | "transcribed" | "held";
   verdict: "clean" | "gated" | "pending";
   reason: string | null;
   text: string;
@@ -322,10 +331,43 @@ export function buildDrainHandlers(providers: DrainProviders): DrainHandler[] {
     },
   };
 
+  // Audio/video: the keyless Workers AI transcription is the only default
+  // path (there is no native audio parser and no server-side demux), so a
+  // missing binding holds the file with the capability named.
+  const transcribeLane: DrainHandler = {
+    handler: "transcribe",
+    tier: providers.ai?.run ? "workers-ai-whisper" : "none",
+    extract: async (doc: HeldDoc): Promise<LaneResult> => {
+      if (!providers.ai?.run) {
+        return {
+          ok: false,
+          reason:
+            `no capable provider configured for ${doc.lane} — enable the ` +
+            "Workers AI binding (env.AI) to transcribe this file",
+          tier: "none",
+        };
+      }
+      const out = await transcribeMedia(
+        providers.ai.run.bind(providers.ai),
+        decodeB64(doc.bytes_b64),
+      );
+      if (!out.ok) {
+        return { ok: false, reason: out.reason, tier: "workers-ai-whisper" };
+      }
+      return {
+        ok: true,
+        text: out.transcription.text,
+        tier: "workers-ai-whisper",
+        status: "transcribed",
+      };
+    },
+  };
+
   return [
     documentLane("document"),
     documentLane("sheets"),
     documentLane("slides"),
     visionLane,
+    transcribeLane,
   ];
 }
