@@ -65,7 +65,7 @@ their bytes in R2. `POST /api/corpus/drain` runs the model pass — with no
 capable provider configured, each file stays held with a reason naming the
 capability you need to add. Held bytes live in R2 only for their retention
 window: a successful drain deletes them immediately, and the scheduled sweep
-deletes anything no drain reached and records the receipt in `audit`. The
+deletes anything no drain reached and records a deletion receipt. The
 window is 24 hours by default and configurable per category with `GET
 /api/retention` and `PUT /api/retention` (whole hours, bounded — a request
 outside the bounds, or for a category that is retained as the investigation's
@@ -84,8 +84,14 @@ record, is refused with a reason).
 
 The cron trigger (`0 6 * * *`) runs `scheduled()`: first the raw-byte
 retention sweep deletes attachment and held-corpus bytes whose configured
-window has lapsed — including files no drain ever reached — and writes a
-receipt to `audit`, naming the windows it enforced; then `evaluateAll`
+window has lapsed — including files no drain ever reached — and records a
+deletion receipt naming every swept category, its counts and whether each
+delete was verified. Read the receipts at `GET /api/retention/sweeps`
+(newest first, counts only), which also shows the live `overdue` view: raw
+rows past their window that still hold bytes. A failed or unconfirmed
+delete keeps its raw key, retries on the next sweep, and stays in
+`overdue` meanwhile; `POST /api/retention/sweep` runs the sweep on demand
+to retry without waiting for the cron. Then `evaluateAll`
 renders reports with a lapsed cadence, crossed
 per-N threshold, or full-dynamic change, through the same gated publish path.
 Every evaluation writes a receipt (`eval_receipts`) — audit them there.

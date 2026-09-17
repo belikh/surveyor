@@ -44,6 +44,11 @@ export interface SweepableCategory {
   default_ms: number;
   min_ms: number;
   max_ms: number;
+  /** The table whose rows point at raw objects, and the statuses whose rows
+   *  still hold a raw key. The sweep reads the catalogue, so a category
+   *  added here is swept without touching the sweep loop. */
+  table: "attachments" | "corpus_docs";
+  statuses: readonly string[];
 }
 
 /** Categories the sweep deletes from. Each maps to raw bytes in the object
@@ -58,6 +63,8 @@ export const SWEEPABLE_CATEGORIES: readonly SweepableCategory[] = [
     default_ms: RAW_RETRY_WINDOW_MS,
     min_ms: MIN_RETENTION_MS,
     max_ms: MAX_RETENTION_MS,
+    table: "attachments",
+    statuses: ["uploaded", "held"],
   },
   {
     id: "corpus_raw",
@@ -68,6 +75,8 @@ export const SWEEPABLE_CATEGORIES: readonly SweepableCategory[] = [
     default_ms: RAW_RETRY_WINDOW_MS,
     min_ms: MIN_RETENTION_MS,
     max_ms: MAX_RETENTION_MS,
+    table: "corpus_docs",
+    statuses: ["held"],
   },
 ];
 
@@ -273,8 +282,25 @@ export async function saveRetentionWindows(
 export const RAW_SWEEP_ACTION = "retention:raw-sweep";
 
 export interface CategorySweep {
+  category: SweepCategoryId;
+  /** Rows whose window had lapsed when the sweep ran. */
+  expired: number;
+  /** Objects whose delete call returned success. */
+  deleted: number;
+  /** Deletions confirmed gone by a follow-up read of the object. */
+  verified: number;
+  /** Deletions the follow-up read could not confirm as gone. */
+  unverified: number;
+  /** Rows still holding their raw key after the sweep (a delete that threw
+   *  or could not be verified). The next sweep retries them. */
+  failed: number;
+}
+
+export interface SweepTotals {
   expired: number;
   deleted: number;
+  verified: number;
+  unverified: number;
   failed: number;
 }
 
@@ -282,8 +308,18 @@ export interface RawSweepReceipt {
   swept_at: string;
   /** The windows this sweep enforced, per category. */
   windows_ms: RetentionWindows;
-  attachments: CategorySweep;
-  corpus: CategorySweep;
+  /** One entry per sweepable category, in catalogue order. A sweep that ran
+   *  reports every category, whether or not anything expired. */
+  categories: CategorySweep[];
+  totals: SweepTotals;
+}
+
+export interface OverdueCategory {
+  category: SweepCategoryId;
+  label: string;
+  /** Rows past their window that still hold raw bytes — a failed delete, an
+   *  unreached sweep, or an unconfirmed object. Visible between sweeps. */
+  overdue: number;
 }
 
 interface RawRow {
@@ -302,53 +338,81 @@ function expiryMs(row: RawRow, windowMs: number): number {
   return Number.isFinite(created) ? created + windowMs : 0;
 }
 
+/**
+ * Delete one category's expired objects and report counts plus the
+ * verification result. A row is marked `expired` only once its object is
+ * confirmed gone; a delete that throws or cannot be verified keeps the raw
+ * key so the next sweep retries rather than losing track of existing bytes.
+ */
 async function sweepCategory(
   db: D1Database,
   bucket: R2Bucket,
-  table: "attachments" | "corpus_docs",
-  statuses: string[],
+  category: SweepableCategory,
   nowMs: number,
   windowMs: number,
 ): Promise<CategorySweep> {
-  const placeholders = statuses.map(() => "?").join(", ");
+  const placeholders = category.statuses.map(() => "?").join(", ");
   const rows = unwrap(
     await db
       .prepare(
-        `SELECT id, raw_key, retry_after, created_at FROM ${table} ` +
+        `SELECT id, raw_key, retry_after, created_at FROM ${category.table} ` +
           `WHERE raw_key IS NOT NULL AND status IN (${placeholders})`,
       )
-      .bind(...statuses)
+      .bind(...category.statuses)
       .all<RawRow>(),
   );
-  const receipt: CategorySweep = { expired: 0, deleted: 0, failed: 0 };
+  const receipt: CategorySweep = {
+    category: category.id,
+    expired: 0,
+    deleted: 0,
+    verified: 0,
+    unverified: 0,
+    failed: 0,
+  };
   for (const row of rows) {
     if (expiryMs(row, windowMs) > nowMs) continue;
     receipt.expired++;
     try {
       await bucket.delete(row.raw_key);
     } catch {
-      // The object stays; the row keeps its raw_key so the next sweep
-      // retries rather than losing track of bytes that still exist.
       receipt.failed++;
       continue;
     }
+    receipt.deleted++;
+    // Verification: the delete call is not proof. Read the object back; a
+    // surviving (or unreadable) object keeps the row for the next sweep.
+    let stillThere = false;
+    try {
+      stillThere = (await bucket.head(row.raw_key)) !== null;
+    } catch {
+      stillThere = true;
+    }
+    if (stillThere) {
+      receipt.unverified++;
+      receipt.failed++;
+      continue;
+    }
+    receipt.verified++;
     await db
       .prepare(
-        `UPDATE ${table} SET status = 'expired', raw_key = NULL, ` +
+        `UPDATE ${category.table} SET status = 'expired', raw_key = NULL, ` +
           `reason = ?, retry_after = NULL WHERE id = ?`,
       )
-      .bind("raw bytes deleted after the configured retention window lapsed", row.id)
+      .bind(
+        "raw bytes deleted after the configured retention window lapsed " +
+          "(deletion verified)",
+        row.id,
+      )
       .run();
-    receipt.deleted++;
   }
   return receipt;
 }
 
 /**
- * Delete expired raw objects and record the receipt. The caller boots the
- * schema first (scheduled(), or a route); this function only reads and
- * deletes. The windows come from the operator's configuration unless the
- * caller supplies them.
+ * Delete expired raw objects across every sweepable category and record the
+ * receipt. The caller boots the schema first (scheduled(), or a route); this
+ * function only reads and deletes. The windows come from the operator's
+ * configuration unless the caller supplies them.
  */
 export async function sweepRawBytes(
   env: Pick<Bindings, "DB" | "CORPUS">,
@@ -357,44 +421,121 @@ export async function sweepRawBytes(
 ): Promise<RawSweepReceipt> {
   const nowMs = Date.parse(nowIso);
   const windows = configured ?? (await loadRetentionWindows(env.DB));
-  const empty: CategorySweep = { expired: 0, deleted: 0, failed: 0 };
   const receipt: RawSweepReceipt = {
     swept_at: nowIso,
     windows_ms: windows,
-    attachments: { ...empty },
-    corpus: { ...empty },
+    categories: [],
+    totals: { expired: 0, deleted: 0, verified: 0, unverified: 0, failed: 0 },
   };
   if (env.CORPUS) {
-    // Never-drained uploads and failed drains both count: an upload whose
-    // queue message is lost must still be deleted on schedule.
-    receipt.attachments = await sweepCategory(
-      env.DB,
-      env.CORPUS,
-      "attachments",
-      ["uploaded", "held"],
-      nowMs,
-      windows.attachment_raw,
-    );
-    receipt.corpus = await sweepCategory(
-      env.DB,
-      env.CORPUS,
-      "corpus_docs",
-      ["held"],
-      nowMs,
-      windows.corpus_raw,
-    );
+    for (const category of SWEEPABLE_CATEGORIES) {
+      const swept = await sweepCategory(
+        env.DB,
+        env.CORPUS,
+        category,
+        nowMs,
+        windows[category.id],
+      );
+      receipt.categories.push(swept);
+      receipt.totals.expired += swept.expired;
+      receipt.totals.deleted += swept.deleted;
+      receipt.totals.verified += swept.verified;
+      receipt.totals.unverified += swept.unverified;
+      receipt.totals.failed += swept.failed;
+    }
+  } else {
+    // No object store bound: report every category with zero counts rather
+    // than a shorter receipt, so "swept" and "swept nothing" stay distinct.
+    for (const category of SWEEPABLE_CATEGORIES) {
+      receipt.categories.push({
+        category: category.id,
+        expired: 0,
+        deleted: 0,
+        verified: 0,
+        unverified: 0,
+        failed: 0,
+      });
+    }
   }
   // The receipt exists whether or not anything expired: a sweep that ran
-  // must be visible to the audit, with the windows it enforced.
+  // must be visible to the audit, with the windows it enforced and the
+  // verification result. Counts only — never keys, filenames or content.
+  await recordSweepReceipt(env.DB, receipt);
   await env.DB.prepare("INSERT INTO audit (ts, action) VALUES (?, ?)")
-    .bind(
-      nowIso,
-      `${RAW_SWEEP_ACTION} ${JSON.stringify({
-        attachments: receipt.attachments,
-        corpus: receipt.corpus,
-        windows_ms: windows,
-      })}`,
-    )
+    .bind(nowIso, `${RAW_SWEEP_ACTION} ${JSON.stringify(receipt)}`)
     .run();
   return receipt;
+}
+
+/** Append-only persistence for the readable receipts surface. The sweep
+ *  itself still writes the audit line; this row is the queryable copy. */
+export async function recordSweepReceipt(
+  db: D1Database,
+  receipt: RawSweepReceipt,
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO retention_sweeps (id, swept_at, receipt_json) VALUES (?, ?, ?)",
+    )
+    .bind(crypto.randomUUID(), receipt.swept_at, JSON.stringify(receipt))
+    .run();
+}
+
+/** The most recent receipts, newest first. An unreadable row is skipped
+ *  rather than failing the read: the audit line remains the fallback. */
+export async function loadRecentSweeps(
+  db: D1Database,
+  limit = 20,
+): Promise<RawSweepReceipt[]> {
+  const rows = unwrap(
+    await db
+      .prepare(
+        "SELECT receipt_json FROM retention_sweeps " +
+          "ORDER BY swept_at DESC, rowid DESC LIMIT ?",
+      )
+      .bind(limit)
+      .all<{ receipt_json: string }>(),
+  );
+  const out: RawSweepReceipt[] = [];
+  for (const row of rows) {
+    try {
+      out.push(JSON.parse(row.receipt_json) as RawSweepReceipt);
+    } catch {
+      // Skip an unreadable row; the next one still reads.
+    }
+  }
+  return out;
+}
+
+/**
+ * Count raw rows past their window that still hold bytes, per category:
+ * the live view of a failed or unconfirmed deletion between sweeps. Reads
+ * only; never names a row.
+ */
+export async function countOverdueRawBytes(
+  env: Pick<Bindings, "DB">,
+  nowIso: string,
+  configured?: RetentionWindows,
+): Promise<OverdueCategory[]> {
+  const nowMs = Date.parse(nowIso);
+  const windows = configured ?? (await loadRetentionWindows(env.DB));
+  const out: OverdueCategory[] = [];
+  for (const category of SWEEPABLE_CATEGORIES) {
+    const placeholders = category.statuses.map(() => "?").join(", ");
+    const rows = unwrap(
+      await env.DB.prepare(
+        `SELECT id, raw_key, retry_after, created_at FROM ${category.table} ` +
+          `WHERE raw_key IS NOT NULL AND status IN (${placeholders})`,
+      )
+        .bind(...category.statuses)
+        .all<RawRow>(),
+    );
+    out.push({
+      category: category.id,
+      label: category.label,
+      overdue: rows.filter((row) => expiryMs(row, windows[category.id]) <= nowMs)
+        .length,
+    });
+  }
+  return out;
 }

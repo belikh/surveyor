@@ -16,6 +16,8 @@ import {
   saveRetentionWindows,
   sweepRawBytes,
   validateRetentionWindows,
+  type CategorySweep,
+  type RawSweepReceipt,
 } from "../src/lib/retention";
 
 // A3: raw submitter attachment bytes and held corpus bytes are deleted once
@@ -110,6 +112,15 @@ async function auditActions(db: FakeD1): Promise<string[]> {
   return rows.map((r) => r.action);
 }
 
+function categorySweep(
+  receipt: RawSweepReceipt,
+  category: string,
+): CategorySweep {
+  const found = receipt.categories.find((c) => c.category === category);
+  if (!found) throw new Error(`no sweep entry for ${category}`);
+  return found;
+}
+
 async function insertSubmission(db: FakeD1) {
   await db
     .prepare(
@@ -129,7 +140,7 @@ describe("raw-byte retention sweep", () => {
     await r2.put(row.raw_key as string, new Uint8Array([1, 2, 3]));
 
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.attachments).toEqual({ expired: 1, deleted: 1, failed: 0 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
     expect(r2.keys()).toEqual([]);
     const after = (await db
       .prepare("SELECT status, raw_key, reason, retry_after FROM attachments WHERE id = ?")
@@ -172,7 +183,7 @@ describe("raw-byte retention sweep", () => {
     await r2.put("attachments/sub-1/retried", new Uint8Array([2]));
 
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.attachments).toEqual({ expired: 0, deleted: 0, failed: 0 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 0, deleted: 0, verified: 0, failed: 0 });
     expect(r2.keys().sort()).toEqual([
       "attachments/sub-1/fresh",
       "attachments/sub-1/retried",
@@ -194,7 +205,7 @@ describe("raw-byte retention sweep", () => {
     await r2.put("attachments/sub-1/lapsed", new Uint8Array([1]));
 
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.attachments).toEqual({ expired: 1, deleted: 1, failed: 0 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
     expect(r2.keys()).toEqual([]);
   });
 
@@ -214,7 +225,7 @@ describe("raw-byte retention sweep", () => {
     await r2.put("corpus/expired", new Uint8Array([1]));
 
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.corpus).toEqual({ expired: 1, deleted: 1, failed: 0 });
+    expect(categorySweep(receipt, "corpus_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
     expect(r2.keys()).toEqual([]);
     const drained = (await db
       .prepare("SELECT status FROM corpus_docs WHERE id = 'drained'")
@@ -234,7 +245,7 @@ describe("raw-byte retention sweep", () => {
     };
 
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.attachments).toEqual({ expired: 1, deleted: 0, failed: 1 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 1, deleted: 0, verified: 0, failed: 1 });
     const after = (await db
       .prepare("SELECT status, raw_key FROM attachments WHERE id = 'att-1'")
       .first()) as { status: string; raw_key: string | null };
@@ -322,7 +333,7 @@ describe("retention categories and configurable windows (D1, #44)", () => {
     await insertAttachment(db, { created_at: ago(25 * HOUR) });
     await r2.put("attachments/sub-1/att-1", new Uint8Array([1]));
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.attachments).toEqual({ expired: 1, deleted: 1, failed: 0 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
     expect(receipt.windows_ms).toEqual(DEFAULT_RETENTION_WINDOWS);
   });
 
@@ -368,8 +379,8 @@ describe("retention categories and configurable windows (D1, #44)", () => {
     }
 
     const receipt = await sweepRawBytes(env, new Date().toISOString());
-    expect(receipt.attachments).toEqual({ expired: 1, deleted: 1, failed: 0 });
-    expect(receipt.corpus).toEqual({ expired: 1, deleted: 1, failed: 0 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
+    expect(categorySweep(receipt, "corpus_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
     expect(r2.keys().sort()).toEqual([
       "attachments/sub-1/inside",
       "corpus/inside",
@@ -551,7 +562,7 @@ describe("retention categories and configurable windows (D1, #44)", () => {
       env,
       new Date(Date.now() + 24 * HOUR).toISOString(),
     );
-    expect(receipt.attachments).toEqual({ expired: 1, deleted: 1, failed: 0 });
+    expect(categorySweep(receipt, "attachment_raw")).toMatchObject({ expired: 1, deleted: 1, verified: 1, failed: 0 });
     expect(r2.keys()).toEqual([]);
   });
 });

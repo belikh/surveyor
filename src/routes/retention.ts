@@ -13,8 +13,11 @@ import {
   HOUR_MS,
   RETAINED_CATEGORIES,
   SWEEPABLE_CATEGORIES,
+  countOverdueRawBytes,
+  loadRecentSweeps,
   loadRetentionWindows,
   saveRetentionWindows,
+  sweepRawBytes,
 } from "../lib/retention";
 
 export const retention = new Hono<{ Bindings: Bindings }>();
@@ -53,6 +56,25 @@ async function view(db: D1Database) {
 retention.get("/", async (c) => {
   await getState(c.env); // boot migration side effect
   return c.json(await view(c.env.DB));
+});
+
+// Deletion receipts (D2, #45): the recorded sweeps, newest first, plus the
+// live overdue view — raw rows past their window that still hold bytes, so
+// a failed or unconfirmed deletion stays visible between sweeps. Counts
+// only; never keys or filenames.
+retention.get("/sweeps", async (c) => {
+  await getState(c.env); // boot migration side effect
+  const sweeps = await loadRecentSweeps(c.env.DB);
+  const overdue = await countOverdueRawBytes(c.env, new Date().toISOString());
+  return c.json({ sweeps, overdue });
+});
+
+// On-demand sweep: the operator's retry lever after a recorded failure,
+// without waiting for the next cron run. Same engine, same receipt.
+retention.post("/sweep", async (c) => {
+  await getState(c.env); // boot migration side effect
+  const receipt = await sweepRawBytes(c.env, new Date().toISOString());
+  return c.json({ receipt });
 });
 
 retention.put("/", async (c) => {

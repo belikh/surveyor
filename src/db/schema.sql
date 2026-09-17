@@ -182,6 +182,16 @@ CREATE TABLE IF NOT EXISTS retention_config (
   updated_at TEXT NOT NULL
 );
 
+-- Deletion receipts (D2, #45). One append-only row per sweep run, readable
+-- by the operator and the audit: per-category counts and the verification
+-- result (was the object confirmed gone after the delete call?). Counts
+-- only — never keys, filenames or content (constitution II).
+CREATE TABLE IF NOT EXISTS retention_sweeps (
+  id TEXT PRIMARY KEY,
+  swept_at TEXT NOT NULL,
+  receipt_json TEXT NOT NULL
+);
+
 -- Data-flow and residency receipts (D6, #49). Append-only snapshots of the
 -- map naming each recipient (Cloudflare, each configured BYOK provider) and
 -- the regions it may process in. Unsealed: recipients and regions are
