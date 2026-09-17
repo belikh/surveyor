@@ -170,6 +170,9 @@ async function storeMultipart(
     await upload.complete(parts);
     return true;
   } catch (err) {
+    // Release the unread remainder too, so the request body is never left
+    // locked by a failed part upload.
+    await reader.cancel().catch(() => {});
     await upload.abort().catch(() => {});
     if (isOverCap()) return false;
     throw err;

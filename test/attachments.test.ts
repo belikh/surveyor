@@ -79,7 +79,7 @@ async function upload(
 /** Streamed framing: the route must never reach for `arrayBuffer()` — that
  *  is the buffering seam. With `declaredLength` the body takes the workerd
  *  FixedLengthStream path (streamed straight to R2); without one it is a
- *  chunked body, buffered under the cap (A15 workerd rule). */
+ *  chunked body, stored as bounded multipart parts (A15 workerd rule). */
 async function streamedUpload(
   env: Record<string, unknown>,
   id: string,
@@ -220,6 +220,15 @@ describe("submitter attachments (R6, FR-045-050)", () => {
     );
     expect(res.status).toBe(413);
     expect(((await res.json()) as { error: string }).error).toBe("too_large");
+    expect((env.CORPUS as FakeR2).keys()).toEqual([]);
+  });
+
+  it("refuses a body that overruns a declared length below the cap", async () => {
+    const env = makeEnv();
+    const { id, code } = await createSubmission(env);
+    const chunks = [new TextEncoder().encode("twenty bytes of body")];
+    const res = await streamedUpload(env, id, code, chunks, "scan.png", 10);
+    expect(res.status).toBe(400);
     expect((env.CORPUS as FakeR2).keys()).toEqual([]);
   });
 

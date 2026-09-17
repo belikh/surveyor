@@ -78,6 +78,14 @@ export class FakeR2 {
           if (!bytes) throw new Error(`missing multipart part ${p.partNumber}`);
           return bytes;
         });
+        // R2's rule: every part but the last is at least 5 MiB. The fake
+        // enforces it so a smaller PART_BYTES cannot pass unnoticed.
+        const MIN_PART_BYTES = 5 * 1024 * 1024;
+        for (const part of ordered.slice(0, -1)) {
+          if (part.byteLength < MIN_PART_BYTES) {
+            throw new Error("multipart part below the R2 minimum of 5 MiB");
+          }
+        }
         const total = ordered.reduce((n, b) => n + b.byteLength, 0);
         const out = new Uint8Array(total);
         let offset = 0;

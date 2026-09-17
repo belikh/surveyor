@@ -56,8 +56,8 @@ corpus.post("/", async (c) => {
   const status = statusFor(typed.lane);
   // Count and cap while forwarding (A14/A15): a declared content-length
   // streams straight into R2 (the FixedLengthStream path), a chunked body is
-  // buffered under the cap. Native text is collected for the in-request
-  // decode; held bytes are never retained raw.
+  // stored as bounded multipart parts. Native text is collected for the
+  // in-request decode; held bytes are never retained raw.
   const forwarded = await storeBody(body, {
     cap: MAX_DOC_BYTES,
     collect: status === "parsed",

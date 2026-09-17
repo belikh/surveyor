@@ -51,8 +51,8 @@ async function upload(
 /** Streamed framing: the route must read the body through the stream, never
  *  `arrayBuffer()` — that is the buffering seam. With `declaredLength` the
  *  body takes the workerd FixedLengthStream path (streamed straight to R2);
- *  without one it is a chunked body, buffered under the cap (A15 workerd
- *  rule). */
+ *  without one it is a chunked body, stored as bounded multipart parts (A15
+ *  workerd rule). */
 async function streamedUpload(
   env: Record<string, unknown>,
   filename: string,
