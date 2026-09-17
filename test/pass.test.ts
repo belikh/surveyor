@@ -296,6 +296,20 @@ describe("journalist pass at publish", () => {
       headers: auth,
       body: "{}",
     });
+    await callApp(env, "/api/reports/briefing/legal", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ reviewer: "A. Lawyer", notes: "pre-publish check" }),
+    });
+    await callApp(env, "/api/reports/briefing/reply", {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        subject: "Example Pty Ltd",
+        channel: "email",
+        outcome: "no_response",
+      }),
+    });
     const pub = await callApp(env, "/api/reports/briefing/publish", {
       method: "POST",
       headers: auth,
@@ -323,14 +337,25 @@ describe("journalist pass at publish", () => {
 
 describe("publish-path model prose", () => {
   async function seedReports(db: FakeD1) {
+    const now = new Date().toISOString();
     await db
       .prepare(
         "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('dossier', ?, 'draft', 1, 0, 0, 0, NULL, ?)",
       )
-      .bind(
-        JSON.stringify(GateConfigSchema.parse({ approved: true })),
-        new Date().toISOString(),
+      .bind(JSON.stringify(GateConfigSchema.parse({ approved: true })), now)
+      .run();
+    // D7's legal gate covers version 1 for this seed.
+    await db
+      .prepare(
+        "INSERT INTO report_legal_records (id, report_type, version, reply_required, record_envelope, created_at) VALUES ('lr-1', 'dossier', 1, 1, 'seed', ?)",
       )
+      .bind(now)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO right_of_reply_attempts (id, report_type, version, outcome, attempted_at, record_envelope, created_at) VALUES ('rr-1', 'dossier', 1, 'no_response', ?, 'seed', ?)",
+      )
+      .bind(now, now)
       .run();
   }
 

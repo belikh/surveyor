@@ -14,6 +14,7 @@ import { gatherEvidence } from "./evidence";
 import { injectionFlags } from "./engine";
 import { runJournalistPass } from "./pass";
 import { recordTurn } from "./telemetry";
+import { LegalGateUnmet, legalGateStatus, pendingVersion } from "./legal";
 import type { ModelClient } from "./serve";
 
 export type ReportType =
@@ -103,6 +104,15 @@ export async function publishReportVersion(
   const evidence = await gatherEvidence(db);
   const verdict = evaluateGates(row.config, evidence);
   if (!verdict.ok) throw new GatesUnmet(verdict.unmet);
+
+  // Legal gate: the release step is a human record tied to the version it
+  // releases. A record for an earlier version never passes this one.
+  const legal = await legalGateStatus(
+    db,
+    type,
+    pendingVersion(row.current_version),
+  );
+  if (!legal.ok) throw new LegalGateUnmet(legal.unmet);
 
   const deterministic = RENDERERS[type](evidence);
   let body = deterministic.body;

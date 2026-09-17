@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { isAllowedProviderBaseUrl } from "./net";
+import { consentVersionOf } from "./consent";
 
 export const SetupPhase = z.enum([
   "welcome",
@@ -74,6 +75,9 @@ export const InstrumentSchema = z.object({
   title: z.string().min(1).max(120),
   blurb: z.string().min(1).max(500),
   consent: z.string().min(1).max(2000),
+  /** Version of the consent copy shown to sources; bumped on change so a
+   *  recorded consent names the wording it was given under. */
+  consent_version: z.number().int().min(1).optional(),
 });
 export type Instrument = z.infer<typeof InstrumentSchema>;
 
@@ -137,12 +141,20 @@ export function validateSetupStep(
       phase: "corpus",
     });
   }
+  // The consent wording is versioned: an edit that changes the copy mints a
+  // new version, so consent captured under an old copy stays distinguishable.
+  const prior = state.instrument;
+  const consentVersion =
+    prior && prior.consent !== step.consent
+      ? consentVersionOf(prior) + 1
+      : consentVersionOf(prior);
   return SetupStateSchema.parse({
     ...state,
     instrument: InstrumentSchema.parse({
       title: step.title,
       blurb: step.blurb,
       consent: step.consent,
+      consent_version: consentVersion,
     }),
     phase: "ready",
     installed_at: new Date().toISOString(),

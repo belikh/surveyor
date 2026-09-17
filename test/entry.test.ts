@@ -239,10 +239,33 @@ describe("scheduled entry", () => {
       method: "POST",
       headers: auth,
     });
+    await recordLegal(env, type);
     await callApp(env, `/api/reports/${type}/publish`, {
       method: "POST",
       headers: auth,
       body: JSON.stringify({}),
+    });
+  }
+
+  // D7's legal gate releases one version at a time, so each auto-render needs
+  // a fresh record for the version it will produce.
+  async function recordLegal(env: Record<string, unknown>, type: string) {
+    await callApp(env, `/api/reports/${type}/legal`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        reviewer: "A. Lawyer",
+        notes: "Defamation and public-interest check complete",
+      }),
+    });
+    await callApp(env, `/api/reports/${type}/reply`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        subject: "Example Pty Ltd",
+        channel: "email",
+        outcome: "no_response",
+      }),
     });
   }
 
@@ -254,6 +277,7 @@ describe("scheduled entry", () => {
       headers: auth,
       body: JSON.stringify({ config: { cadence_ms: 1 } }),
     });
+    await recordLegal(env, "briefing");
 
     await worker.scheduled(
       {} as ScheduledEvent,

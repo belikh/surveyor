@@ -79,6 +79,28 @@ async function seedEvidence(env: Record<string, unknown>) {
   });
 }
 
+// D7's legal gate releases one version at a time; tests that publish must
+// record it for the pending version first.
+async function recordLegal(env: Record<string, unknown>, type: string) {
+  await callApp(env, `/api/reports/${type}/legal`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      reviewer: "A. Lawyer",
+      notes: "Defamation and public-interest check complete",
+    }),
+  });
+  await callApp(env, `/api/reports/${type}/reply`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({
+      subject: "Example Pty Ltd",
+      channel: "email",
+      outcome: "no_response",
+    }),
+  });
+}
+
 describe("report routes", () => {
   it("blocks publish without approval and publishes after it", async () => {
     const env = makeEnv();
@@ -97,6 +119,7 @@ describe("report routes", () => {
       method: "POST",
       headers: auth,
     });
+    await recordLegal(env, "dossier");
     const pub = (await (
       await callApp(env, "/api/reports/dossier/publish", {
         method: "POST",
@@ -112,6 +135,7 @@ describe("report routes", () => {
     ).json()) as Record<string, unknown>;
     expect(read.version).toBe(1);
     expect(String(read.body)).toContain("dossier");
+    await recordLegal(env, "dossier");
     await callApp(env, "/api/reports/dossier/publish", {
       method: "POST",
       headers: auth,
@@ -172,7 +196,8 @@ describe("report routes", () => {
       body: JSON.stringify({ config: { manual_required: false } }),
     });
     expect(sneak.status).toBe(409);
-    // Proper path: pre-configure automatics, then publish cleanly.
+    // Proper path: pre-configure automatics, record the legal release, then
+    // publish cleanly.
     await callApp(env, "/api/reports/briefing/config", {
       method: "POST",
       headers: auth,
@@ -180,6 +205,7 @@ describe("report routes", () => {
         config: { manual_required: false, min_submissions: 0 },
       }),
     });
+    await recordLegal(env, "briefing");
     const pub = (await (
       await callApp(env, "/api/reports/briefing/publish", {
         method: "POST",

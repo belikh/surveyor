@@ -171,3 +171,77 @@ CREATE TABLE IF NOT EXISTS attachments (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_attachments_submission ON attachments(submission_id);
+
+-- Breach assessments (Privacy Act Part IIIC). The facts and decision are
+-- sealed in record_envelope; aware_at and decision stay plaintext so the
+-- thirty-day assessment clock (s 26WH) is queryable without opening it.
+CREATE TABLE IF NOT EXISTS breach_assessments (
+  id TEXT PRIMARY KEY,
+  aware_at TEXT NOT NULL,
+  decision TEXT NOT NULL DEFAULT 'pending',
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Generated privacy and collection notices (APP 1, APP 5). Notices are
+-- public documents, so they are stored unsealed; every append-only version
+-- carries the data-flow snapshot it was generated from.
+CREATE TABLE IF NOT EXISTS notice_versions (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  body TEXT NOT NULL,
+  data_flows_json TEXT NOT NULL,
+  operator_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (type, version)
+);
+
+-- Sensitive-category consent captures (APP 3.3). Decisions are sealed —
+-- which categories a source consented to is itself sensitive information —
+-- while the wording version stays plaintext so coverage can be grouped
+-- without opening records. Captures are append-only; the latest decision
+-- per category is the one in force.
+CREATE TABLE IF NOT EXISTS consent_records (
+  id TEXT PRIMARY KEY,
+  submission_id TEXT NOT NULL,
+  wording_version INTEGER NOT NULL,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_consent_records_submission ON consent_records(submission_id);
+
+-- Which sensitive categories a stored answer was tagged with. Joined by
+-- HMAC so no category name sits in plaintext next to sealed testimony.
+CREATE TABLE IF NOT EXISTS message_categories (
+  submission_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  category_hmac TEXT NOT NULL,
+  PRIMARY KEY (submission_id, seq, category_hmac)
+);
+
+-- Publication legal gate: one legal review per report version, and the
+-- right-of-reply attempts logged against it. Reviewer, notes and reply
+-- detail are sealed; version, reply_required and outcome stay plaintext so
+-- the gate check and the audit list do not open records.
+CREATE TABLE IF NOT EXISTS report_legal_records (
+  id TEXT PRIMARY KEY,
+  report_type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  reply_required INTEGER NOT NULL DEFAULT 1,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (report_type, version)
+);
+
+CREATE TABLE IF NOT EXISTS right_of_reply_attempts (
+  id TEXT PRIMARY KEY,
+  report_type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  attempted_at TEXT NOT NULL,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_reply_attempts_report ON right_of_reply_attempts(report_type, version);

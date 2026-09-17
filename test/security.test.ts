@@ -242,6 +242,20 @@ describe("poison containment", () => {
         method: "POST",
         headers: auth,
       });
+      await callApp(env, `/api/reports/${t}/legal`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ reviewer: "A. Lawyer", notes: "pre-publish check" }),
+      });
+      await callApp(env, `/api/reports/${t}/reply`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          subject: "Example Pty Ltd",
+          channel: "email",
+          outcome: "no_response",
+        }),
+      });
       await callApp(env, `/api/reports/${t}/publish`, {
         method: "POST",
         headers: auth,

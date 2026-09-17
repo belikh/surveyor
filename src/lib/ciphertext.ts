@@ -104,4 +104,8 @@ export const CIPHERTEXT_AUDIT_COLUMNS: SealedColumn[] = [
   { table: "research_lines", column: "findings_envelope" },
   { table: "report_versions", column: "body_envelope" },
   { table: "report_entries", column: "entry_envelope" },
+  { table: "breach_assessments", column: "record_envelope" },
+  { table: "consent_records", column: "record_envelope" },
+  { table: "report_legal_records", column: "record_envelope" },
+  { table: "right_of_reply_attempts", column: "record_envelope" },
 ];

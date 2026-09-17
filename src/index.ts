@@ -57,12 +57,15 @@ import {
 } from "./lib/ciphertext";
 import SCHEMA_SQL from "./db/schema.sql";
 import { isProviderSlot, PROVIDER_SLOTS } from "./lib/setup";
+import { sensitiveConsentPanel } from "./lib/consent";
 import { listTelemetry } from "./lib/telemetry";
 import intake from "./routes/intake";
 import corpus from "./routes/corpus";
 import launch from "./routes/launch";
 import engine from "./routes/engine";
 import reports from "./routes/reports";
+import breach from "./routes/breach";
+import notices from "./routes/notices";
 import { evaluateAll } from "./lib/schedule";
 import { sweepRawBytes } from "./lib/retention";
 import { REQUIRED_SCOPES, REVOCATION_GUIDANCE } from "./lib/scopes";
@@ -153,7 +156,12 @@ app.get("/survey", async (c) => {
     consent: "",
   };
   return c.html(
-    surveyShell(instrument.title, instrument.blurb, instrument.consent),
+    surveyShell(
+      instrument.title,
+      instrument.blurb,
+      instrument.consent,
+      sensitiveConsentPanel(s.instrument),
+    ),
   );
 });
 app.get("/survey.js", (c) =>
@@ -197,10 +205,16 @@ app.use("/api/engine/*", async (c, next) => {
 });
 app.route("/api/engine", engine);
 
-// Report mutation (approve/publish/draft) is operator-only; published
-// reads stay public.
+// Report mutation (approve/publish/draft) is operator-only, as are the
+// legal gate's audit views (they name reviewers and reply subjects);
+// published reads stay public.
 app.use("/api/reports/*", async (c, next) => {
-  if (c.req.method !== "GET" || c.req.path.endsWith("/draft")) {
+  if (
+    c.req.method !== "GET" ||
+    c.req.path.endsWith("/draft") ||
+    c.req.path.endsWith("/legal") ||
+    c.req.path.endsWith("/reply")
+  ) {
     const denied = await requireOperator(c);
     if (denied) return c.json(deny(denied), denied);
   }
@@ -227,6 +241,24 @@ app.post("/api/scheduler/evaluate", async (c) => {
   );
   return c.json({ receipts });
 });
+
+// Breach assessments and OAIC statement drafts are operator-only: they
+// name affected people and describe the incident.
+app.use("/api/breach/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/breach", breach);
+
+// Notices are operator documents until published: generation names the
+// operator and its provider configuration, so the surface is operator-only.
+app.use("/api/notices/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/notices", notices);
 
 // Launch pack: generation and rotation are operator-only; the slug
 // landing page is public (it is the survey's front door).

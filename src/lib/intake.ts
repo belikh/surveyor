@@ -3,6 +3,7 @@
 // sealed before storage — never persisted (constitution I).
 
 import { z } from "zod";
+import { ConsentBodySchema, SensitiveCategorySchema } from "./consent";
 
 export const PowProofSchema = z.object({
   challenge: z.string().min(1).max(512),
@@ -12,12 +13,16 @@ export const PowProofSchema = z.object({
 export const CreateBodySchema = z.object({
   pow: PowProofSchema,
   turnstile_token: z.string().max(2048).optional(),
+  /** Granular sensitive-category consent given before any answer is stored. */
+  consent: ConsentBodySchema.optional(),
 });
 
 export const AnswerSchema = z.object({
   q: z.string().min(1).max(128),
   value: z.string().max(10_000),
   topic: z.string().min(1).max(64),
+  /** Sensitive categories this answer contains, as declared by the source. */
+  sensitive_categories: z.array(SensitiveCategorySchema).max(9).optional(),
 });
 
 /** The source's identity: the access code minted at creation (XXXX-XXXX). */
