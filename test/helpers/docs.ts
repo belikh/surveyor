@@ -17,6 +17,8 @@ interface ZipInput {
   name: string;
   data: string | Uint8Array;
   deflate?: boolean;
+  /** Declared uncompressed size, when the fixture must lie about it. */
+  declaredSize?: number;
 }
 
 export function buildZip(entries: ZipInput[]): Uint8Array {
@@ -47,7 +49,7 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
     u16(local, 0);
     u32(local, 0);
     u32(local, body.length);
-    u32(local, raw.length);
+    u32(local, entry.declaredSize ?? raw.length);
     u16(local, nameBytes.length);
     u16(local, 0);
     local.push(...nameBytes, ...body);
@@ -71,7 +73,7 @@ export function buildZip(entries: ZipInput[]): Uint8Array {
     u16(central, 0);
     u32(central, 0);
     u32(central, body.length);
-    u32(central, raw.length);
+    u32(central, entry.declaredSize ?? raw.length);
     u16(central, nameBytes.length);
     u16(central, 0);
     u16(central, 0);

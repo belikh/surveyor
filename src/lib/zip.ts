@@ -45,9 +45,18 @@ interface CentralEntry {
   localOffset: number;
 }
 
+export interface ZipEntryInfo {
+  name: string;
+  method: number;
+  compressedSize: number;
+  uncompressedSize: number;
+}
+
 export interface ZipArchive {
   /** Entry names in central-directory order. */
   names(): string[];
+  /** Declared sizes for one entry, without inflating it (cap checks). */
+  stat(name: string): ZipEntryInfo | null;
   /** Inflated bytes for one entry, or null when it does not exist. */
   read(name: string): Promise<Uint8Array | null>;
 }
@@ -94,6 +103,17 @@ export async function openZip(bytes: Uint8Array): Promise<ZipArchive> {
 
   return {
     names: () => [...entries.keys()],
+    stat: (name: string) => {
+      const e = entries.get(name);
+      return e
+        ? {
+            name: e.name,
+            method: e.method,
+            compressedSize: e.compressedSize,
+            uncompressedSize: e.uncompressedSize,
+          }
+        : null;
+    },
     read: async (name: string) => {
       const e = entries.get(name);
       if (!e) return null;

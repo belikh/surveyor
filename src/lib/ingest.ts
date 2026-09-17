@@ -21,6 +21,7 @@ export type Lane =
   | "held-xlsx"
   | "held-pptx"
   | "held-email"
+  | "held-archive"
   | "held-ocr"
   | "rejected";
 
@@ -74,6 +75,16 @@ export function classifyLane(
     return {
       lane: "held-email",
       reason: "email parses natively on drain; the model pass is the fallback",
+    };
+  }
+  if (
+    extension === ".zip" ||
+    mime === "application/zip" ||
+    mime === "application/x-zip-compressed"
+  ) {
+    return {
+      lane: "held-archive",
+      reason: "members parse natively on drain; the model pass is the fallback",
     };
   }
   if (

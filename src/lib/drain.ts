@@ -37,6 +37,7 @@ const LANE_HANDLERS: Record<string, DrainStep["handler"] | undefined> = {
   "held-xlsx": "sheets",
   "held-pptx": "slides",
   "held-email": "document",
+  "held-archive": "document",
   "held-ocr": "vision",
 };
 
