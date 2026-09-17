@@ -1,6 +1,7 @@
 # ADR-0004: Five report types behind manual-first gates and two-tier rewrites
 
-**Status**: Accepted (wayfinder decision, 2026-09-14)
+**Status**: Accepted (wayfinder decision, 2026-09-14); two-tier rewrite routing
+retired 2026-09-17 (#31)
 
 **Deciders**: operator (user), via wayfinder ticket `t05-report-gates`
 
@@ -34,10 +35,23 @@ on any new evidence and thus widens the poisoning exposure window.
 **Rewrite depth is two-tier, routed by the significance judge** (ADR-0003).
 Corroboration-only submissions tick lightweight updates (evidence counts,
 dossier tallies); substantial new material (new angles, claims, unresearched
-ground) triggers a full journalist pass.
+ground) triggers a full journalist pass. _(Retired 2026-09-17 — see Update.)_
 
 **Published history is append-only.** Regeneration produces a new version; a
 published reader's words never change silently.
+
+## Update (2026-09-17): two-tier rewrite routing retired (#31)
+
+The two-tier rewrite routing is **retired**, not wired. Nothing at the report
+layer ever derived new topics from the significance judge (ADR-0003): the
+judge's output feeds research-line retriggering (`src/lib/retrigger.ts`), while
+the stored `pending_topics` queue never influenced a publish. The dormant
+`POST /:type/tick` route and the `pending_topics_json` and `corroborations`
+columns are removed so no route advertises a routing decision it cannot make.
+Reports re-render through the one shared publish path
+(`src/lib/publish.ts`), whose counts are read from the evidence at render
+time. Append-only versioning, gate evaluation and the four frequencies are
+unchanged.
 
 ## Consequences
 

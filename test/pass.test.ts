@@ -69,7 +69,6 @@ function evidence(over: Partial<Evidence> = {}): Evidence {
     addenda: 0,
     corpusDocs: 1,
     heldDocs: 0,
-    corroborations: 0,
     angles: [],
     lines: [
       {
@@ -229,7 +228,7 @@ describe("journalist pass (R7)", () => {
     const db = env.DB as FakeD1;
     await seedLine(db, kit, "complete", "Complete line");
     await seedLine(db, kit, "held", "Held line");
-    const ev = await gatherEvidence(db as never, 0);
+    const ev = await gatherEvidence(db as never);
     const titles = ev.lines.map((l) => l.title);
     expect(titles).toContain("Complete line");
     expect(titles).not.toContain("Held line");
@@ -326,7 +325,7 @@ describe("publish-path model prose", () => {
   async function seedReports(db: FakeD1) {
     await db
       .prepare(
-        "INSERT INTO reports (type, config_json, status, enabled, corroborations, pending_topics_json, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('dossier', ?, 'draft', 1, 0, '[]', 0, 0, 0, NULL, ?)",
+        "INSERT INTO reports (type, config_json, status, enabled, current_version, sched_last_count, sched_total, approved_at, updated_at) VALUES ('dossier', ?, 'draft', 1, 0, 0, 0, NULL, ?)",
       )
       .bind(
         JSON.stringify(GateConfigSchema.parse({ approved: true })),

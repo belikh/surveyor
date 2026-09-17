@@ -1,6 +1,5 @@
 // Report routes: five types from one evidence bundle, manual-first
-// gates with opt-in automatics, two-tier updates (corroboration ticks
-// versus journalist passes), append-only versioned history. Published
+// gates with opt-in automatics, append-only versioned history. Published
 // reads are public; everything mutating is operator-gated.
 
 import { Hono } from "hono";
@@ -72,10 +71,9 @@ reports.get("/:type/versions", async (c) => {
 reports.get("/:type/draft", async (c) => {
   const t = reportType(c);
   if (!t) return notFound(c);
-  const row = await reportRow(c.env.DB, t);
-  const evidence = await gatherEvidence(c.env.DB, row.corroborations);
+  const evidence = await gatherEvidence(c.env.DB);
   const doc = RENDERERS[t](evidence);
-  return c.json({ ...doc, version: "draft", pending_topics: row.pending_topics });
+  return c.json({ ...doc, version: "draft" });
 });
 
 // Gate configuration lives here — never in the publish call itself, so a
@@ -83,11 +81,6 @@ reports.get("/:type/draft", async (c) => {
 const ConfigBodySchema = z.object({
   config: GateConfigSchema.partial(),
   enabled: z.boolean().optional(),
-});
-
-const TickBodySchema = z.object({
-  new_topics: z.array(z.string().min(1).max(64)).max(64),
-  corroborations: z.number().int().min(0).max(1_000_000),
 });
 
 reports.post("/:type/config", async (c) => {
@@ -145,33 +138,6 @@ reports.post("/:type/publish", async (c) => {
     }
     throw err;
   }
-});
-
-reports.post("/:type/tick", async (c) => {
-  const t = reportType(c);
-  if (!t) return notFound(c);
-  const parsed = TickBodySchema.safeParse(await c.req.json());
-  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
-  const row = await reportRow(c.env.DB, t);
-  // Two-tier routing: substance records pending topics for the next
-  // journalist pass (visible in draft); corroboration alone ticks counts.
-  if (parsed.data.new_topics.length > 0) {
-    const pending = [...new Set([...row.pending_topics, ...parsed.data.new_topics])];
-    await c.env.DB.prepare(
-      "UPDATE reports SET pending_topics_json = ?, updated_at = ? WHERE type = ?",
-    ).bind(JSON.stringify(pending), new Date().toISOString(), t).run();
-    return c.json({
-      action: "journalist_pass_required",
-      new_topics: parsed.data.new_topics,
-      pending_topics: pending,
-      corroborations: row.corroborations,
-    });
-  }
-  const total = row.corroborations + parsed.data.corroborations;
-  await c.env.DB.prepare(
-    "UPDATE reports SET corroborations = ?, updated_at = ? WHERE type = ?",
-  ).bind(total, new Date().toISOString(), t).run();
-  return c.json({ action: "ticked", corroborations: total });
 });
 
 export default reports;

@@ -52,7 +52,7 @@ capability you need to add.
 - `POST /api/engine/angles/propose` queues grounded angles; approve them
   before research lines open (`spend_cap` is enforced).
 - `POST /api/reports/:type/approve` then `/publish`. Gated publishes only;
-  versioned history; corroboration ticks versus full journalist passes.
+  append-only versioned history.
 
 ## 5. Scheduled digests
 

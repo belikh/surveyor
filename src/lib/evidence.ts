@@ -14,10 +14,7 @@ export function unwrap<T>(rows: T[] | { results: T[] }): T[] {
   return Array.isArray(rows) ? rows : rows.results;
 }
 
-export async function gatherEvidence(
-  db: D1Database,
-  corroborations: number,
-): Promise<Evidence> {
+export async function gatherEvidence(db: D1Database): Promise<Evidence> {
   const submissionCount = await db
     .prepare("SELECT COUNT(*) AS n FROM submissions WHERE kind = 'original'")
     .first<{ n: number }>();
@@ -56,7 +53,6 @@ export async function gatherEvidence(
     addenda: addendaCount?.n ?? 0,
     corpusDocs: parsedCount?.n ?? 0,
     heldDocs: heldCount?.n ?? 0,
-    corroborations,
     angles: approvedAngles.map((a) => ({
       title: a.title,
       exhibits: z.array(ExhibitRefSchema).parse(JSON.parse(a.exhibits_json)) as ExhibitRef[],

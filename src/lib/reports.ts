@@ -1,7 +1,7 @@
-// Report domain: gate evaluation, five deterministic renderers, two-tier
-// update routing. Renderers are extractive scaffolds over the same
-// evidence bundle; the LLM prose pass for long-form runs at serving time
-// and its output stays fenced. Every render carries provenance.
+// Report domain: gate evaluation and five deterministic renderers.
+// Renderers are extractive scaffolds over the same evidence bundle; the
+// LLM prose pass for long-form runs at serving time and its output stays
+// fenced. Every render carries provenance.
 
 import { z } from "zod";
 import { DEFAULT_CADENCE_MS } from "./schedule";
@@ -53,7 +53,6 @@ export interface Evidence {
   addenda: number;
   corpusDocs: number;
   heldDocs: number;
-  corroborations: number;
   angles: EvidenceAngle[];
   lines: EvidenceLine[];
   started_at: string;
@@ -131,8 +130,7 @@ export function renderBriefing(e: Evidence): RenderedDoc {
     type: "briefing",
     provenance: "untrusted",
     body:
-      `Live briefing — ${e.submissions} submissions, ${e.corpusDocs} corpus documents, ` +
-      `${e.corroborations} corroborations.\n` +
+      `Live briefing — ${e.submissions} submissions, ${e.corpusDocs} corpus documents.\n` +
       (lines || "No research lines complete yet."),
   };
 }
@@ -170,8 +168,7 @@ export function renderSnapshot(e: Evidence): RenderedDoc {
     body:
       `# Data snapshot\n\n- Submissions: ${e.submissions} (+${e.addenda} addenda)\n` +
       `- Corpus documents: ${e.corpusDocs} parsed, ${e.heldDocs} held\n- Angles: ${e.angles.length}\n` +
-      `- Research lines: ${e.lines.length}\n- Citations: ${citations}\n` +
-      `- Corroborations: ${e.corroborations}`,
+      `- Research lines: ${e.lines.length}\n- Citations: ${citations}`,
   };
 }
 
