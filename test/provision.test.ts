@@ -38,7 +38,11 @@ function fakeApi(overrides: Partial<CloudflareApi> = {}): CloudflareApi & {
     createWorkflow: track("createWorkflow", async () => ids.workflow),
     getWorkflowId: track("getWorkflowId", async () => ids.workflow),
     putCronTrigger: track("putCronTrigger", async () => true),
-    putSecret: track("putSecret", async () => true),
+    // The adapter mints and writes only absent generated slots; a present
+    // slot is reported set with written false. The fake models that.
+    putSecret: track("putSecret", async (_slot: string, generate: boolean) =>
+      generate ? { set: true, written: true } : { set: true, written: false },
+    ),
     listR2Objects: track("listR2Objects", async () => []),
     deleteR2Objects: track("deleteR2Objects", async () => true),
     deleteWorker: track("deleteWorker", async () => true),
@@ -75,10 +79,10 @@ describe("provisionStack", () => {
     expect(receipt.workflow.id).toBe("wf-1");
     expect(receipt.cron).toBe(true);
     expect(receipt.secrets).toEqual([
-      { slot: "SERVER_SECRET", set: true, generated: true },
-      { slot: "ENCRYPTION_KEY", set: true, generated: true },
-      { slot: "OPERATOR_TOKEN", set: true, generated: true },
-      { slot: "GROQ_API_KEY", set: true, generated: false },
+      { slot: "SERVER_SECRET", set: true, generated: true, written: true },
+      { slot: "ENCRYPTION_KEY", set: true, generated: true, written: true },
+      { slot: "OPERATOR_TOKEN", set: true, generated: true, written: true },
+      { slot: "GROQ_API_KEY", set: true, generated: false, written: false },
     ]);
   });
 
@@ -125,6 +129,21 @@ describe("provisionStack", () => {
     const r2 = await provisionStack(api, plan);
     expect(r2.d1.id).toBe(r1.d1.id);
   });
+
+  it("reports an existing generated slot as set but not written (A2)", async () => {
+    // A re-run finds the slot present: nothing is minted, nothing is
+    // overwritten, and the receipt stays truthful about it.
+    const api = fakeApi({
+      putSecret: async () => ({ set: true, written: false }),
+    });
+    const receipt = await provisionStack(api, plan);
+    expect(receipt.secrets[0]).toEqual({
+      slot: "SERVER_SECRET",
+      set: true,
+      generated: false,
+      written: false,
+    });
+  });
 });
 
 describe("teardownStack", () => {
@@ -137,7 +156,14 @@ describe("teardownStack", () => {
       queue: { id: "q-1" },
       workflow: { id: "wf-1" },
       cron: true,
-      secrets: [{ slot: "SERVER_SECRET", set: true, generated: true }],
+      secrets: [
+        {
+          slot: "SERVER_SECRET",
+          set: true,
+          generated: true,
+          written: true,
+        },
+      ],
     });
     const order = api.calls.map((c) => c.method);
     const r2List = order.indexOf("listR2Objects");

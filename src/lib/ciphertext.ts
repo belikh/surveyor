@@ -109,3 +109,32 @@ export const CIPHERTEXT_AUDIT_COLUMNS: SealedColumn[] = [
   { table: "report_legal_records", column: "record_envelope" },
   { table: "right_of_reply_attempts", column: "record_envelope" },
 ];
+
+/** A sealed column plus the row key the reseal path updates it by. */
+export interface ResealColumn extends SealedColumn {
+  key: string;
+}
+
+/**
+ * Every sealed column the key-rotation path re-seals. Kept explicit and
+ * gated against CIPHERTEXT_AUDIT_COLUMNS (test/worker.test.ts): a sealed
+ * column the audit inspects but rotation never touches would survive a key
+ * change unreadable, so the gap fails a test rather than surfacing at read
+ * time. The four `record_envelope` columns are streams B/C/D's additions;
+ * the rotation path carries them alongside the original set.
+ */
+export const RESEAL_COLUMNS: ResealColumn[] = [
+  { table: "messages", column: "body_envelope", key: "rowid" },
+  { table: "entities", column: "name_envelope", key: "rowid" },
+  { table: "corpus_docs", column: "text_envelope", key: "id" },
+  { table: "corpus_docs", column: "filename", key: "id" },
+  { table: "attachments", column: "filename", key: "id" },
+  { table: "angles", column: "rationale_envelope", key: "id" },
+  { table: "research_lines", column: "findings_envelope", key: "id" },
+  { table: "report_versions", column: "body_envelope", key: "id" },
+  { table: "report_entries", column: "entry_envelope", key: "id" },
+  { table: "breach_assessments", column: "record_envelope", key: "id" },
+  { table: "consent_records", column: "record_envelope", key: "id" },
+  { table: "report_legal_records", column: "record_envelope", key: "id" },
+  { table: "right_of_reply_attempts", column: "record_envelope", key: "id" },
+];

@@ -60,10 +60,10 @@ the code still falls short of a decision, with the owning ticket.
   stored gates are met; ADR-0015 retires it and records gates as advisory, and
   that code change is not yet claimed by a ticket.
 - **0005 / 0009** — provision and teardown have routes and receipts but have not
-  been exercised against a live Cloudflare account (A16, #17; A17, #18), and
-  re-provisioning is not yet non-destructive (A2, #3). The reseal path still
-  names the pre-campaign sealed-column set, so A2 must extend it alongside the
-  audit's list.
+  been exercised against a live Cloudflare account (A16, #17; A17, #18).
+  Re-provisioning is non-destructive (A2, #3): an existing key or operator
+  token is never rewritten, and the rotation path's reseal list covers every
+  sealed column the at-rest audit inspects.
 - **0015** — angles still queue for explicit approval rather than
   auto-approving unless flagged (B-series engine build, #19–#21), and it is the
   scheduled digest that still auto-publishes where gates are met (see 0004).

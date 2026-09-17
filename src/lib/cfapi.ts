@@ -145,21 +145,23 @@ export function createCloudflareApi(ctx: CfApiContext): CloudflareApi {
       return true;
     },
     async putSecret(slot, set) {
-      if (!set) {
-        // Operator-supplied slot: report presence, write nothing.
-        const list = await call<Array<{ name: string }>>(
-          "GET",
-          `/workers/scripts/${script}/secrets`,
-        );
-        return list.some((s) => s.name === slot);
-      }
+      // Presence first: re-provisioning must never rotate a slot that is
+      // already set (A2). Generated values are minted in-flight and pushed
+      // straight to the store; operator-supplied slots are presence-checked
+      // only — the provisioner has no value to write.
+      const list = await call<Array<{ name: string }>>(
+        "GET",
+        `/workers/scripts/${script}/secrets`,
+      );
+      const present = list.some((s) => s.name === slot);
+      if (present || !set) return { set: present, written: false };
       const value = generateSecret(slot);
       await call<unknown>("PUT", `/workers/scripts/${script}/secrets`, {
         name: slot,
         text: value,
         type: "secret_text",
       });
-      return true;
+      return { set: true, written: true };
     },
     async listR2Objects(bucket) {
       const r = await call<Array<{ key: string }>>(

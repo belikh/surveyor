@@ -20,10 +20,12 @@ npm ci && npm run build
 npx wrangler deploy
 ```
 
-Revoke the token straight after. Do not rotate the installation's key
-material as a precaution — rotation is a deliberate, resealing action (see
-**Key rotation and re-sealing** below), and an unnecessary rotation is what
-orphans sealed rows.
+Revoke the token straight after. Re-running provisioning (the wizard's boot
+panel or `POST /api/provision`) is non-destructive: it ensures missing
+resources and slots and never rewrites a secret that is already set. Do not
+rotate the installation's key material as a precaution — rotation is a
+deliberate, resealing action (see **Key rotation and re-sealing** below), and
+an unnecessary rotation is what orphans sealed rows.
 
 ## 2. First-run setup
 
@@ -142,7 +144,8 @@ Never paste a secret value into a transcript, issue, or commit.
 `SERVER_SECRET` and `ENCRYPTION_KEY` are the installation's key material. The
 runtime refuses to boot without them — there is no development fallback — so
 an installation that ever ran on placeholder key material must rotate before
-collecting testimony.
+collecting testimony. This is the only path that changes key material:
+re-provisioning and the boot panel never rewrite a slot that is already set.
 
 1. Set new `SERVER_SECRET` and `ENCRYPTION_KEY` worker secrets.
 2. Re-seal existing rows with the previous pair, operator-gated:
@@ -153,8 +156,12 @@ collecting testimony.
      -d '{"old_server_secret":"<previous>","old_encryption_key":"<previous>"}'
    ```
 
-   The route opens every `v1.` envelope with the supplied old kit, writes it
-   back with the current kit, and skips rows that are already current.
+   The route covers every sealed column the at-rest audit inspects. For each
+   `v1.` envelope it opens with the supplied old kit, seals with the current
+   kit, verifies the re-sealed envelope opens back with the current kit,
+   then writes it; rows already readable with the current kit are skipped.
+   The receipt reports per-column counts plus `skipped` and `failed`;
+   envelopes no held kit can open are left untouched and make `ok` false.
 3. Confirm `GET /api/audit/ciphertext` reports `ok: true`.
 
 Rows sealed under a key you no longer hold cannot be recovered. `GET

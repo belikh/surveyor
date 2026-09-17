@@ -69,7 +69,7 @@ function fakeCloudflare(): CloudflareApi {
     createWorkflow: async () => ids.workflow,
     getWorkflowId: async () => ids.workflow,
     putCronTrigger: async () => true,
-    putSecret: async () => true,
+    putSecret: async () => ({ set: true, written: true }),
     listR2Objects: async () => [],
     deleteR2Objects: async () => true,
     deleteWorker: async () => true,
