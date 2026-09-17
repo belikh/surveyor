@@ -60,12 +60,16 @@ describe("browser PDF tools (R6, T923)", () => {
     const js = await res.text();
     expect(() => new Script(js)).not.toThrow();
     expect(js).not.toContain("innerHTML");
+    // A15: the file is the raw request body, with the filename in a header.
+    // The retired base64 JSON framing must not come back.
+    expect(js).not.toContain("content_b64");
     for (const needle of [
       "window.SurveyorPdf",
       "extractText",
       "rasterise",
       "/api/corpus/drain",
       "authorization",
+      "x-filename",
     ]) {
       expect(js, needle).toContain(needle);
     }

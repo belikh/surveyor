@@ -49,9 +49,10 @@ fix is on its stream branch and lands when the campaign merges.
   PDF.js worker asset (A5, #6). The wizard does not yet ask for capability tags
   (B5, #23). The two-page multi-modal rescue is not built (superseded by
   ADR-0011).
-- **0002 / 0012** — corpus uploads arrive as base64 JSON bodies rather than
-  streams (A15, #16); submitter attachments stream through the Worker into R2
-  (A14, #15).
+- **0002 / 0012** — corpus uploads stream through the Worker into R2 through a
+  counting, capping transform, with the filename in the `x-filename` header and
+  native text decoded from the counted stream (A15, #16); submitter attachments
+  stream the same way (A14, #15).
 - **0003** — research lines exist with citation validation and spend caps but do
   not research autonomously; a line completes through the operator's findings
   POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding

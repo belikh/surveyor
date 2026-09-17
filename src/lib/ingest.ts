@@ -1,9 +1,10 @@
 // Corpus ingestion lanes: classify by file class, gate text before it
-// grounds anything, record lane + verdict + status per document. Nothing
-// is parsed in-request beyond text; model lanes (OCR/rescue) record an
-// honest held status the engine (T5) drains. Hostile input fails loud.
+// grounds anything, record lane + verdict + status per document. Uploads
+// stream (A15): the route classifies by type, counts and caps the body,
+// and only the native text lane decodes in-request beyond that; model lanes
+// (OCR/rescue) record an honest held status the engine (T5) drains. Hostile
+// input fails loud.
 
-import { z } from "zod";
 import { canonicaliseText, quarantineText } from "./intake";
 
 /** 25 MB per document: above this, fail closed, never truncate silently. */
@@ -94,12 +95,6 @@ export function gateCorpusText(raw: string): GatedText {
     names: hits.map((h) => h.name),
   };
 }
-
-export const UploadBodySchema = z.object({
-  filename: z.string().min(1).max(256),
-  content_type: z.string().min(1).max(128),
-  content_b64: z.string().min(1).max(MAX_DOC_BYTES * 2),
-});
 
 export type DocStatus =
   | "parsed"

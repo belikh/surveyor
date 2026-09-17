@@ -66,15 +66,14 @@ async function configureProvider(env: Record<string, unknown>) {
 }
 
 async function seedCorpus(env: Record<string, unknown>, text: string) {
-  const b64 = Buffer.from(text, "utf8").toString("base64");
   await callApp(env, "/api/corpus", {
     method: "POST",
-    headers: auth,
-    body: JSON.stringify({
-      filename: "notes.txt",
-      content_type: "text/plain",
-      content_b64: b64,
-    }),
+    headers: {
+      authorization: `Bearer ${TOKEN}`,
+      "x-filename": encodeURIComponent("notes.txt"),
+      "content-type": "text/plain",
+    },
+    body: text,
   });
 }
 

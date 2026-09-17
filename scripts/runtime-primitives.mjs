@@ -114,6 +114,18 @@ try {
       headers: AUTH,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  // Corpus uploads stream (A15): the bytes are the body, the filename rides
+  // in `x-filename` (A11), never a base64 JSON field.
+  const upload = (filename, mediaType, body) =>
+    mf.dispatchFetch(`${base}/api/corpus`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "x-filename": encodeURIComponent(filename),
+        "content-type": mediaType,
+      },
+      body,
+    });
   const db = await mf.getD1Database("DB");
   const bucket = await mf.getR2Bucket("CORPUS");
 
@@ -126,11 +138,7 @@ try {
       blurb: "runtime primitives",
       consent: "smoke",
     });
-    const up = await post("/api/corpus", {
-      filename: "scan.png",
-      content_type: "image/png",
-      content_b64: Buffer.from("fake-scan-bytes").toString("base64"),
-    });
+    const up = await upload("scan.png", "image/png", "fake-scan-bytes");
     if (up.status !== 200) {
       throw new Error(`held upload answered HTTP ${up.status}`);
     }
@@ -209,11 +217,7 @@ try {
 
   // --- workflow:create-run --------------------------------------------
   const runWorkflow = async () => {
-    await post("/api/corpus", {
-      filename: "notes.txt",
-      content_type: "text/plain",
-      content_b64: Buffer.from("Rosters run late on Tuesdays").toString("base64"),
-    });
+    await upload("notes.txt", "text/plain", "Rosters run late on Tuesdays");
     const proposed = await (
       await post("/api/engine/angles/propose", { topics: ["roster"] })
     ).json();

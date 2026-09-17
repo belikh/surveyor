@@ -23,9 +23,10 @@ while OCR runs server-side.
   text only. Scanned PDFs are rasterised **in-browser** (self-hosted PDF.js);
   the page images upload **through the Worker** into a **private R2 key**. The
   server vision-OCRs the pages, runs the name-leak gate, then **deletes** the
-  raw bytes. **Amendment (2026-09-17)**: submitter attachments stream into R2
-  through a counting, capping transform (A14, #15); corpus uploads still arrive
-  as a buffered base64 JSON body (A15, #16).
+  raw bytes. **Amendment (2026-09-17)**: submitter attachments and corpus
+  uploads stream through the Worker into R2 through a counting, capping
+  transform (A14, #15; A15, #16); held-lane bytes never sit in isolate memory,
+  and native corpus text decodes from the counted stream.
 - **Failure**: a bounded **24 h retry window** keeps the raw pages for retry,
   then deletes them. The window is enforced by the scheduled raw-byte sweep
   (`src/lib/retention.ts`, A3), which deletes bytes no drain reached — even
