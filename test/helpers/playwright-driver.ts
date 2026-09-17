@@ -111,6 +111,21 @@ export function playwrightDriver(
         async screenshot() {
           return new Uint8Array(await page.screenshot());
         },
+        async drag(selector, dx, dy) {
+          const box = await page.locator(selector).boundingBox();
+          if (!box) throw new Error(`no box for ${selector}`);
+          const x = box.x + box.width / 2;
+          const y = box.y + box.height / 2;
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          await page.mouse.move(x + dx, y + dy, { steps: 5 });
+          await page.mouse.up();
+        },
+        async attribute(selector, name) {
+          return (
+            (await page.locator(selector).first().getAttribute(name)) ?? ""
+          );
+        },
       };
 
       return {

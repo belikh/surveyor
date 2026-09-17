@@ -55,6 +55,16 @@ async function waitForText(
   }
 }
 
+/** Open a console section window from the View menu. */
+async function openSection(
+  actions: BrowserActions,
+  id: string,
+): Promise<void> {
+  await actions.click('[data-action="menu-view"]');
+  await actions.click('[data-action="open-' + id + '"]');
+  await actions.waitFor('[data-window-content="' + id + '"]');
+}
+
 /** Wait for a native dialog the handler recorded, never a fixed sleep: a
  *  publish does real work (evidence, sealing) before it answers. */
 async function waitForDialog(
@@ -161,27 +171,38 @@ export async function runConsoleBrowserCheck(
 
     await step("console:unauthenticated-gate", async () => {
       await actions.waitFor('[data-field="operator-token"]');
-      const text = await actions.readText("#app");
-      if (!text.includes("Set the operator token above")) {
+      const session = await actions.readText("#app");
+      if (!session.includes("Token not set")) {
+        throw new Error("the session window did not render the token panel");
+      }
+      // The corpus controls must not be reachable before the token: open the
+      // corpus window from the menu and check the upload control is inert.
+      await openSection(actions, "corpus");
+      const gated = await actions.readText("#app");
+      if (!gated.includes("Set the operator token in the Session window")) {
         throw new Error("the gated hint is not on screen");
       }
-      // The corpus controls must not be reachable before the token: a
-      // driver click either cannot resolve or hits a disabled control.
-      await actions.click('a[href="#corpus"]');
+      let probe = "absent";
       try {
         await actions.click('[data-action="corpus-upload"]');
+        probe = "clickable";
       } catch {
-        return "upload control absent/inert before the token";
+        // The control is not reachable while gated: the honest outcome.
       }
-      const disabled = await actions.isDisabled('[data-action="corpus-upload"]');
-      if (!disabled) throw new Error("upload control was live before the token");
-      return "upload control disabled before the token";
+      if (probe === "clickable") {
+        const disabled = await actions.isDisabled('[data-action="corpus-upload"]');
+        if (!disabled) throw new Error("upload control was live before the token");
+        probe = "disabled";
+      }
+      // Put the desktop back so the token can be typed on top.
+      await actions.click('[data-action="window-close"][data-window="corpus"]');
+      return `upload control ${probe} before the token`;
     });
 
     await step("console:token-and-home", async () => {
       await actions.fill('[data-field="operator-token"]', opts.operatorToken);
       await actions.click('[data-action="token-set"]');
-      await actions.click('a[href="#home"]');
+      await openSection(actions, "home");
       await waitForText(actions, "#app", "Outstanding work", 10_000);
       const text = await actions.readText("#app");
       if (!text.includes("Build ")) throw new Error("the build identity is missing");
@@ -189,7 +210,7 @@ export async function runConsoleBrowserCheck(
     });
 
     await step("console:corpus-upload-and-drain", async () => {
-      await actions.click('a[href="#corpus"]');
+      await openSection(actions, "corpus");
       await actions.waitFor('[data-field="corpus-files"]');
       await actions.setInputFiles('[data-field="corpus-files"]', [file]);
       await actions.click('[data-action="corpus-upload"]');
@@ -203,7 +224,7 @@ export async function runConsoleBrowserCheck(
     });
 
     await step("console:angle-review", async () => {
-      await actions.click('a[href="#engine"]');
+      await openSection(actions, "engine");
       await actions.fill('[data-field="angle-topics"]', TOPICS);
       // Local D1 can serve a stale read just after a write; an operator
       // would press Propose again. Retry rather than assert on one read.
@@ -232,7 +253,7 @@ export async function runConsoleBrowserCheck(
     });
 
     await step("console:publish-refused-honestly", async () => {
-      await actions.click('a[href="#reports"]');
+      await openSection(actions, "reports");
       // The report panels are collapsible; open the briefing one before
       // touching its controls. The console keeps it open across re-renders.
       await actions.click('summary[data-report="briefing"]');
@@ -256,6 +277,7 @@ export async function runConsoleBrowserCheck(
     await step("console:confirmed-publish", async () => {
       // Satisfy the report's gates through the console — approval, legal
       // review, one right-of-reply attempt — then publish for real.
+      await openSection(actions, "reports");
       dialogs.length = 0;
       await actions.click('[data-action="report-approve"][data-type="briefing"]');
       // Wait for the in-place acknowledgement before touching the gates
@@ -305,6 +327,20 @@ export async function runConsoleBrowserCheck(
         }
         await sleep(200);
       }
+    });
+    await step("console:window-drag", async () => {
+      if (!actions.drag || !actions.attribute) {
+        throw new Error("the driver cannot drag windows");
+      }
+      await openSection(actions, "corpus");
+      const before = await actions.attribute('[data-window="corpus"]', "style");
+      await actions.drag('[data-titlebar="corpus"]', 96, 48);
+      const after = await actions.attribute('[data-window="corpus"]', "style");
+      const left = (style: string) => Number(/left:(\d+)px/.exec(style)?.[1] ?? 0);
+      if (left(after) <= left(before)) {
+        throw new Error(`window did not move (${before} -> ${after})`);
+      }
+      return `window moved ${left(before)}px -> ${left(after)}px`;
     });
   } finally {
     try {

@@ -107,6 +107,8 @@ export interface ConsoleHarness {
   inputs: () => ElementStub[];
   /** Change the hash and fire the driver's hashchange listener. */
   navigate: (hash: string) => Promise<void>;
+  /** Fire a document-level event (drag mousemove/mouseup, keydown). */
+  dispatchDocument: (type: string, ev: Record<string, unknown>) => Promise<void>;
   /** Replace the confirm/alert handler (auto-accept by default). */
   setDialogHandler: (
     handler: (kind: "confirm" | "alert", message: string) => boolean,
@@ -130,6 +132,15 @@ export async function bootConsole(
   const alerts: string[] = [];
   const confirms: string[] = [];
   const hashListeners: Array<() => void> = [];
+  const windowListeners: Record<string, Array<(ev: unknown) => void>> = {};
+  const documentListeners: Record<string, Array<(ev: unknown) => void>> = {};
+  const dispatchOn = (
+    listeners: Record<string, Array<(ev: unknown) => void>>,
+    type: string,
+    ev: unknown,
+  ) => {
+    for (const fn of listeners[type] ?? []) fn(ev);
+  };
   const dialogHolder = {
     handler: (kind: "confirm" | "alert", message: string): boolean => {
       if (opts.confirm) return opts.confirm(message);
@@ -141,10 +152,21 @@ export async function bootConsole(
       getElementById: (id: string) => (id === "app" ? app : null),
       createElement: (tag: string) => new ElementStub(tag),
       head,
+      addEventListener: (type: string, fn: (ev: unknown) => void) => {
+        (documentListeners[type] ??= []).push(fn);
+      },
+      removeEventListener: (type: string, fn: (ev: unknown) => void) => {
+        documentListeners[type] = (documentListeners[type] ?? []).filter(
+          (f) => f !== fn,
+        );
+      },
     },
     window: {
-      addEventListener: (type: string, fn: () => void) => {
-        if (type === "hashchange") hashListeners.push(fn);
+      innerWidth: 1280,
+      innerHeight: 900,
+      addEventListener: (type: string, fn: (ev: unknown) => void) => {
+        if (type === "hashchange") hashListeners.push(fn as () => void);
+        (windowListeners[type] ??= []).push(fn);
       },
     },
     location: {
@@ -238,6 +260,10 @@ export async function bootConsole(
     navigate: async (hash: string) => {
       (sandbox.location as { hash: string }).hash = hash;
       for (const fn of hashListeners) fn();
+      await flush();
+    },
+    dispatchDocument: async (type: string, ev: Record<string, unknown>) => {
+      dispatchOn(documentListeners, type, { type, ...ev });
       await flush();
     },
     setDialogHandler: (handler) => {

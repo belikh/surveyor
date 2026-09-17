@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import {
   bootConsole,
+  findAll,
+  type ElementStub,
   type Responder,
   type StubResponse,
 } from "./helpers/console-dom";
@@ -64,7 +66,7 @@ describe("console boot and gating (F3, #67)", () => {
     );
     expect(h.text()).toContain("Not provisioned");
     expect(h.text()).toContain("deadbeef");
-    expect(h.text()).toContain("/setup");
+    expect(findAll(h.app, (n) => n.attrs.href === "/setup")).toHaveLength(1);
     // Only the public status call left the page.
     expect(h.calls.map((c) => c.path)).toEqual(["/api/status"]);
   });
@@ -72,7 +74,9 @@ describe("console boot and gating (F3, #67)", () => {
   it("fires no list request until the operator token is set", async () => {
     const h = await bootConsole(responder(emptyLists));
     expect(h.calls.map((c) => c.path)).toEqual(["/api/status"]);
-    expect(h.text()).toContain("Set the operator token above");
+    // The session window is the gated boot: token panel, no requests.
+    expect(h.text()).toContain("Token not set");
+    expect(h.text()).toContain("inert until it is");
     // A gated section renders the gate, not the controls.
     await h.setToken("op-token");
     const paths = h.calls.map((c) => c.path);
@@ -95,6 +99,7 @@ describe("console boot and gating (F3, #67)", () => {
     const h = await bootConsole(responder(emptyLists), { hash: "#corpus" });
     expect(h.buttons().map((b) => b.text())).not.toContain("Upload files");
     expect(h.text()).toContain("Operator token required");
+    expect(h.text()).toContain("Set the operator token in the Session window");
     expect(h.calls.map((c) => c.path)).toEqual(["/api/status"]);
   });
 });
@@ -332,5 +337,82 @@ describe("console human gates (#67)", () => {
     await h.click("Uninstall the installation");
     expect(h.confirms[0]).toContain("cannot be undone");
     expect(h.calls.some((c) => c.path === "/api/teardown")).toBe(false);
+  });
+});
+
+describe("console desktop: menus and windows (#68)", () => {
+  const byAction = (h: Awaited<ReturnType<typeof bootConsole>>, action: string) =>
+    findAll(h.app, (n) => n.attrs["data-action"] === action)[0];
+
+  it("opens a section window from the View menu", async () => {
+    const h = await bootConsole(responder(emptyLists));
+    await h.setToken("op-token");
+    byAction(h, "menu-view").onclick?.();
+    await h.flush();
+    byAction(h, "open-corpus").onclick?.();
+    await h.flush();
+    const windows = findAll(
+      h.app,
+      (n) => n.tag === "section" && n.attrs["data-window"] === "corpus",
+    );
+    expect(windows).toHaveLength(1);
+    expect(h.text()).toContain("Upload files");
+  });
+
+  it("closes and zooms a window", async () => {
+    const h = await bootConsole(responder(emptyLists), { hash: "#corpus" });
+    await h.setToken("op-token");
+    const window = () =>
+      findAll(
+        h.app,
+        (n) => n.tag === "section" && n.attrs["data-window"] === "corpus",
+      )[0];
+    const width = () =>
+      Number(/width:(\d+)px/.exec(window().attrs.style ?? "")?.[1] ?? 0);
+    const before = width();
+    byAction(h, "window-zoom") &&
+      findAll(
+        h.app,
+        (n) =>
+          n.attrs["data-action"] === "window-zoom" &&
+          n.attrs["data-window"] === "corpus",
+      )[0].onclick?.();
+    await h.flush();
+    expect(width()).toBeGreaterThan(before);
+    findAll(
+      h.app,
+      (n) =>
+        n.attrs["data-action"] === "window-close" &&
+        n.attrs["data-window"] === "corpus",
+    )[0].onclick?.();
+    await h.flush();
+    expect(
+      findAll(
+        h.app,
+        (n) => n.tag === "section" && n.attrs["data-window"] === "corpus",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("drags a window by its title bar", async () => {
+    const h = await bootConsole(responder(emptyLists), { hash: "#corpus" });
+    await h.setToken("op-token");
+    const window = () =>
+      findAll(
+        h.app,
+        (n) => n.tag === "section" && n.attrs["data-window"] === "corpus",
+      )[0];
+    const left = () =>
+      Number(/left:(\d+)px/.exec(window().attrs.style ?? "")?.[1] ?? 0);
+    const before = left();
+    const bar = findAll(
+      h.app,
+      (n) => n.attrs["data-titlebar"] === "corpus",
+    )[0] as ElementStub & { onmousedown: ((e: unknown) => void) | null };
+    bar.onmousedown?.({ clientX: 100, clientY: 100, preventDefault: () => {} });
+    await h.flush();
+    await h.dispatchDocument("mousemove", { clientX: 160, clientY: 140 });
+    await h.dispatchDocument("mouseup", {});
+    expect(left()).toBe(before + 60);
   });
 });

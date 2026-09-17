@@ -38,6 +38,10 @@ export interface BrowserActions {
   onDialog(handler: (kind: "confirm" | "alert", message: string) => boolean): void;
   /** Optional failure artefact: a driver with a viewport returns a PNG. */
   screenshot?(): Promise<Uint8Array>;
+  /** Drag an element by `dx`,`dy` — window title bars in the console shell. */
+  drag?(selector: string, dx: number, dy: number): Promise<void>;
+  /** Read an attribute value ("" when absent). */
+  attribute?(selector: string, name: string): Promise<string>;
 }
 
 export interface BrowserSession {

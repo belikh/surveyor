@@ -130,6 +130,25 @@ function actionDriver(): BrowserDriver {
         async screenshot() {
           return new Uint8Array(32);
         },
+        async drag(selector, dx, dy) {
+          const node = resolve(selector) as ElementStub & {
+            onmousedown: ((e: unknown) => void) | null;
+          };
+          node.onmousedown?.({
+            clientX: 100,
+            clientY: 100,
+            preventDefault: () => {},
+          });
+          await h.flush();
+          await h.dispatchDocument("mousemove", {
+            clientX: 100 + dx,
+            clientY: 100 + dy,
+          });
+          await h.dispatchDocument("mouseup", {});
+        },
+        async attribute(selector, name) {
+          return resolve(selector).attrs[name] ?? "";
+        },
       };
       return {
         async goto(path) {
@@ -169,6 +188,7 @@ describe("console browser check (#67)", () => {
       "pass:console:angle-review",
       "pass:console:publish-refused-honestly",
       "pass:console:confirmed-publish",
+      "pass:console:window-drag",
     ]);
   }, 60_000);
 

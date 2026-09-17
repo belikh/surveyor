@@ -13,6 +13,7 @@ import { surveyShell, SURVEY_JS } from "./frontend/survey";
 import { consoleShell, CONSOLE_JS } from "./frontend/console";
 import PDF_TOOLS_JS from "../dist/pdf-tools.txt";
 import PDF_WORKER_JS from "../dist/pdf.worker.txt";
+import CHICAGO_TTF from "../assets/fonts/ChicagoFLF.ttf";
 import {
   reorderProviders,
   resolveChain,
@@ -107,7 +108,7 @@ function securityHeaders(env: Bindings): Record<string, string> {
   return {
     "content-security-policy":
       `default-src 'none'; ${scriptSrc}; style-src 'unsafe-inline'; ` +
-      `connect-src 'self'${frameSrc}; base-uri 'none'`,
+      `font-src 'self'; connect-src 'self'${frameSrc}; base-uri 'none'`,
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
     "x-frame-options": "DENY",
@@ -216,6 +217,14 @@ app.get("/pdf-tools.js", (c) =>
 // the worker runs same-origin with no third-party fetch (ADR-0011).
 app.get("/pdf.worker.mjs", (c) =>
   c.body(PDF_WORKER_JS, 200, { "content-type": "application/javascript" }),
+);
+// The Platinum window/menu face (ChicagoFLF, public domain — see
+// assets/fonts/README.md). Self-hosted: no third-party origin, so the CSP
+// gains font-src 'self' for it alone.
+app.get("/fonts/ChicagoFLF.ttf", (c) =>
+  c.body(new Uint8Array(CHICAGO_TTF).buffer, 200, {
+    "content-type": "font/ttf",
+  }),
 );
 
 app.route("/api/intake", intake);

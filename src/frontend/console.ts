@@ -12,14 +12,32 @@
 // reveal, teardown, reseal, rotation, key deletion) demand explicit
 // confirmation, and where the API records a reason, a typed reason.
 
-import { WIZARD_CSS, CONSOLE_CSS } from "./chrome";
+import { MAC9_CSS } from "./chrome";
+
+// Console-only chrome: the desktop and its windows live under the menu bar;
+// section painters render into scrollable window content.
+const CONSOLE_CSS = `
+.mac-desktop { overflow: hidden; position: relative; height: calc(100vh - 22px); }
+.mac-window-content a { color: #0000cc; }
+.mac-window-content a:visited { color: #660099; }
+.mac-window-content ul { margin: 4px 0 0; padding-left: 18px; }
+.mac-window-content li { margin: 2px 0; }
+.os9-status-block { display: block; }
+.os9-status-block .mac-lamp { margin-right: 4px; }
+.mac-apple-title { padding: 1px 9px 0; }
+.mac-apple { display: inline-block; width: 13px; height: 13px; position: relative; }
+.mac-apple::before { content: ""; position: absolute; left: 1px; top: 3px; width: 11px; height: 10px; background: #000; border-radius: 46% 46% 52% 52%; }
+.mac-apple::after { content: ""; position: absolute; left: 6px; top: 0; width: 4px; height: 4px; background: #000; border-radius: 50% 0 50% 0; transform: rotate(-20deg); }
+.mac-menu-title:hover .mac-apple::before, .mac-menu-title[aria-expanded="true"] .mac-apple::before,
+.mac-menu-title:hover .mac-apple::after, .mac-menu-title[aria-expanded="true"] .mac-apple::after { background: #fff; }
+`;
 
 export function consoleShell(): string {
   return `<!DOCTYPE html>
 <html lang="en-AU"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Surveyor Console</title><style>${WIZARD_CSS}${CONSOLE_CSS}</style></head>
-<body class="console"><main id="app"></main>
+<title>Surveyor Console</title><style>${MAC9_CSS}${CONSOLE_CSS}</style></head>
+<body class="mac9"><main id="app"></main>
 <script src="/console.js"></script></body></html>`;
 }
 
@@ -33,9 +51,11 @@ const app = document.getElementById("app");
 let TOKEN = "";
 let CF_TOKEN = "";
 let STATUS = null;
-let statusNode = null;
 const STATE = { openSubmission: null, openLine: null, openReport: null };
-// Sections in navigation order; #home is the default.
+// Desktop state: open windows in z-order, their geometry, the open menu, and
+// the OAuth/session surface. Geometry survives a re-render; painters re-run.
+const W = { open: [], pos: {}, z: 10, menu: null, cascade: 0 };
+// Sections in menu/window order; #home is the default window.
 const SECTIONS = [
   ["home", "Home"],
   ["providers", "Providers"],
@@ -44,7 +64,7 @@ const SECTIONS = [
   ["engine", "Engine"],
   ["reports", "Reports"],
   ["compliance", "Compliance"],
-  ["case", "Case file"],
+  ["case", "Case File"],
   ["launch", "Launch"],
 ];
 // The OAuth callback returns the transient Cloudflare token in the URL
@@ -58,11 +78,6 @@ function readFragment() {
   }
 }
 readFragment();
-function currentSection() {
-  const h = String(location.hash || "").replace(/^#/, "").split("?")[0];
-  for (const s of SECTIONS) if (s[0] === h) return h;
-  return "home";
-}
 function errorText(e) {
   if (!e) return "unknown error";
   if (e.token) {
@@ -159,16 +174,17 @@ function loading(parent, label) {
   };
 }
 function heading(body, title, refresh) {
-  const row = el("div", { class: "os9-row" }, el("h1", { text: title }));
+  void title;
+  const row = el("div", { class: "os9-row mac-head" });
   if (refresh) row.append(btn("Refresh", refresh));
-  body.append(row);
+  if (row.children.length > 0) body.append(row);
 }
 // gated() is the single gate: until the operator token is set, controls
 // are disabled, the hint says why, and loaders fire no request at all —
 // a missing token must never read as a system failure (F3, #66).
 function gated() { return TOKEN.length === 0; }
 function gateHint() {
-  return "Set the operator token above to enable this section \\u2014 no request leaves this page until then.";
+  return "Set the operator token in the Session window to enable this section \\u2014 no request leaves this page until then.";
 }
 function gatePanel() {
   const p = panel(strong("Operator token required"), warn(gateHint()));
@@ -190,20 +206,24 @@ function statusStrip() {
       bits.push("Build " + s.build.commit + (s.build.local ? " (local)" : ""));
     }
   }
-  const node = el("div", { class: "os9-panel", role: "status" },
-    el("span", { class: "os9-lamp " + (!STATUS || s.degraded ? "off" : "on") }),
+  const node = el("div", { class: "os9-status-block", role: "status" },
+    el("span", { class: "mac-lamp " + (!STATUS ? "idle" : s.degraded ? "off" : "on") }),
     el("span", { text: " " + bits.join(" \\u00b7 ") }));
   if (s.warning) node.append(warn(s.warning));
   if (s.provisioned === false) {
     node.append(el("a", { href: "/setup", text: "Open first-run setup" }));
   }
-  statusNode = node;
   return node;
 }
 function tokenPanel() {
   const t = input("Operator token (chosen at boot)", "password");
   t.setAttribute("data-field", "operator-token");
-  const set = btn("Set token", () => { TOKEN = t.value.trim(); t.value = ""; render(); });
+  const set = btn("Set token", () => {
+    TOKEN = t.value.trim();
+    t.value = "";
+    if (W.open.indexOf("home") < 0) openWindow("home");
+    else render();
+  });
   set.setAttribute("data-action", "token-set");
   const clear = btn("Clear token", () => { TOKEN = ""; render(); });
   return panel(strong("Operator token"),
@@ -212,18 +232,280 @@ function tokenPanel() {
       : "Token not set. Controls are inert until it is."),
     el("div", { class: "os9-row" }, t, set, clear));
 }
-function nav() {
-  const bar = el("nav", { class: "os9-nav", "aria-label": "Console sections" });
-  const here = currentSection();
-  for (const s of SECTIONS) {
-    bar.append(el("a", {
-      class: "os9-tab" + (here === s[0] ? " current" : ""),
-      href: "#" + s[0],
-      text: s[1],
-      "aria-current": here === s[0] ? "page" : "false",
-    }));
+// ------------------------------------------------ desktop: menu + windows
+// The console is a Platinum desktop: a menu bar over draggable windows. The
+// menu bar carries the sections (View), the windows themselves (Windows),
+// the session and about panels (Apple), and a health lamp and clock.
+function sectionTitle(id) {
+  for (const s of SECTIONS) if (s[0] === id) return s[1];
+  if (id === "session") return "Operator Session";
+  if (id === "about") return "About This Console";
+  if (id === "help") return "Surveyor Help";
+  return id;
+}
+function viewport() {
+  const w = (typeof window !== "undefined" && window.innerWidth) ? window.innerWidth : 1024;
+  const h = (typeof window !== "undefined" && window.innerHeight) ? window.innerHeight : 768;
+  return { w: w, h: h };
+}
+function defaultGeometry() {
+  const v = viewport();
+  const n = W.cascade++ % 7;
+  return {
+    x: 22 + n * 26,
+    y: 30 + n * 22,
+    w: Math.min(820, v.w - 44),
+    h: Math.min(560, v.h - 80),
+    zoomed: false,
+    saved: null,
+  };
+}
+function openWindow(id) {
+  if (!W.pos[id]) W.pos[id] = defaultGeometry();
+  if (W.open.indexOf(id) < 0) W.open.push(id);
+  else focusWindow(id);
+  if (location.hash !== "#" + id) {
+    try { history.replaceState(null, "", "#" + id); } catch (e) {}
   }
-  return bar;
+  render();
+}
+function closeWindow(id) {
+  const i = W.open.indexOf(id);
+  if (i >= 0) W.open.splice(i, 1);
+  if (location.hash === "#" + id) {
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+  }
+  render();
+}
+function closeFrontWindow() { if (W.open.length > 0) closeWindow(W.open[W.open.length - 1]); }
+function focusWindow(id) {
+  const i = W.open.indexOf(id);
+  if (i < 0) return;
+  W.open.splice(i, 1);
+  W.open.push(id);
+  // Bring-to-front updates in place: no painter re-run on a focus change.
+  W.open.forEach((wid, index) => {
+    const live = W.live && W.live[wid];
+    if (!live) return;
+    live.node.setAttribute("style", geometryStyle(wid, 10 + index));
+    live.node.setAttribute("class", "mac-window" + (wid === id ? "" : " inactive"));
+  });
+}
+function geometryStyle(id, z) {
+  const p = W.pos[id];
+  return "left:" + p.x + "px; top:" + p.y + "px; width:" + p.w + "px; height:" + p.h + "px; z-index:" + z + ";";
+}
+function applyGeometry(id) {
+  const live = W.live && W.live[id];
+  if (live) live.node.setAttribute("style", geometryStyle(id, 10 + W.open.indexOf(id)));
+}
+function zoomWindow(id) {
+  const p = W.pos[id];
+  if (!p) return;
+  if (p.zoomed) {
+    const s = p.saved;
+    if (s) { p.x = s.x; p.y = s.y; p.w = s.w; p.h = s.h; }
+    p.zoomed = false;
+  } else {
+    p.saved = { x: p.x, y: p.y, w: p.w, h: p.h };
+    const v = viewport();
+    p.x = 6; p.y = 6; p.w = v.w - 12; p.h = v.h - 46; p.zoomed = true;
+  }
+  applyGeometry(id);
+}
+function startDrag(id, ev) {
+  const p = W.pos[id];
+  if (!p || !ev) return;
+  const startX = ev.clientX || 0, startY = ev.clientY || 0;
+  const left = p.x, top = p.y;
+  const bodyClass = (add) => {
+    if (typeof document !== "undefined" && document.body && document.body.classList) {
+      if (add) document.body.classList.add("mac-dragging");
+      else document.body.classList.remove("mac-dragging");
+    }
+  };
+  const move = (m) => {
+    p.x = Math.max(0, left + (m.clientX || 0) - startX);
+    p.y = Math.max(22, top + (m.clientY || 0) - startY);
+    applyGeometry(id);
+  };
+  const up = () => {
+    if (document.removeEventListener) {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    }
+    bodyClass(false);
+  };
+  if (document.addEventListener) {
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  }
+  // A window drag must never select the page (classic Mac behaviour).
+  bodyClass(true);
+  if (ev.preventDefault) ev.preventDefault();
+}
+function windowNode(id) {
+  const node = el("section", { class: "mac-window", "data-window": id, role: "dialog", "aria-label": sectionTitle(id) });
+  const titlebar = el("div", { class: "mac-titlebar", "data-titlebar": id });
+  const close = el("button", { class: "mac-box close", "aria-label": "Close", "data-action": "window-close", "data-window": id });
+  close.onclick = () => closeWindow(id);
+  const zoom = el("button", { class: "mac-box zoom", "aria-label": "Zoom", "data-action": "window-zoom", "data-window": id });
+  zoom.onclick = () => zoomWindow(id);
+  titlebar.append(close, el("span", { class: "mac-title", text: sectionTitle(id) }), zoom);
+  titlebar.onmousedown = (e) => { focusWindow(id); startDrag(id, e); };
+  const content = el("div", { class: "mac-window-content", "data-window-content": id });
+  node.append(titlebar, content);
+  node.onmousedown = () => focusWindow(id);
+  return { node: node, content: content };
+}
+function isFront(id) { return W.open.length > 0 && W.open[W.open.length - 1] === id; }
+function clockText() {
+  const d = new Date();
+  let h = d.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12; if (h === 0) h = 12;
+  return h + ":" + String(d.getMinutes()).padStart(2, "0") + " " + ampm;
+}
+function menuDefs() {
+  const sectionItems = SECTIONS.map((s) => ({ label: s[1], action: () => openWindow(s[0]), actionId: "open-" + s[0] }));
+  const windowItems = W.open.slice().reverse().map((id) => ({
+    label: sectionTitle(id),
+    action: () => { focusWindow(id); render(); },
+    actionId: "focus-" + id,
+  }));
+  return [
+    { id: "apple", title: "", apple: true, items: [
+      { label: "About This Console\\u2026", action: () => openWindow("about"), actionId: "open-about" },
+      { sep: true },
+      { label: "Operator Session\\u2026", action: () => openWindow("session"), actionId: "open-session" },
+      { sep: true },
+      { label: "Open Survey", action: () => { location.href = "/"; }, actionId: "open-survey" },
+      { label: "Open Setup", action: () => { location.href = "/setup"; }, actionId: "open-setup-page" },
+    ]},
+    { id: "file", title: "File", items: [
+      { label: "Open Survey", action: () => { location.href = "/"; }, actionId: "file-open-survey" },
+      { label: "Open Setup", action: () => { location.href = "/setup"; }, actionId: "file-open-setup" },
+      { sep: true },
+      { label: "Close Window", action: closeFrontWindow, actionId: "close-window" },
+      { label: "Refresh Window", action: () => render(), actionId: "refresh-window" },
+    ]},
+    { id: "edit", title: "Edit", items: [
+      { label: "Undo", disabled: true }, { label: "Cut", disabled: true },
+      { label: "Copy", disabled: true }, { label: "Paste", disabled: true },
+      { label: "Select All", disabled: true },
+    ]},
+    { id: "view", title: "View", items: sectionItems.concat([
+      { sep: true },
+      { label: "Refresh Window", action: () => render(), actionId: "refresh-window-view" },
+    ])},
+    { id: "windows", title: "Windows", items: windowItems.length > 0
+      ? windowItems.concat([{ sep: true }, { label: "Close All Windows", action: () => { W.open = []; render(); }, actionId: "close-all-windows" }])
+      : [{ label: "No Windows", disabled: true }] },
+    { id: "special", title: "Special", items: [
+      { label: "Restart Session", action: () => { TOKEN = ""; W.open = ["session"]; render(); }, actionId: "restart-session" },
+      { sep: true },
+      { label: "Shut Down\\u2026", action: () => openWindow("launch"), actionId: "open-launch" },
+      { label: "Sleep", disabled: true },
+    ]},
+    { id: "help", title: "Help", items: [
+      { label: "Surveyor Help", action: () => openWindow("help"), actionId: "open-help" },
+    ]},
+  ];
+}
+function menuItem(item, menuId) {
+  if (item.sep) return el("div", { class: "mac-menu-sep" });
+  const disabled = item.disabled === true;
+  const node = el("div", {
+    role: "menuitem",
+    class: "mac-menu-item",
+    text: item.label,
+    "aria-disabled": disabled ? "true" : "false",
+    "data-action": item.actionId || ("menu-item-" + menuId),
+  });
+  if (!disabled && item.action) node.onclick = () => { closeMenus(); item.action(); };
+  return node;
+}
+function openMenu(id) { W.menu = id; renderMenus(); }
+function closeMenus() { W.menu = null; renderMenus(); }
+function toggleMenu(id) { W.menu = (W.menu === id) ? null : id; renderMenus(); }
+function renderMenus() {
+  if (!W.menubar) return;
+  W.menubar.replaceChildren();
+  for (const menu of menuDefs()) {
+    const wrap = el("div", { class: "mac-menu-wrap" });
+    const title = el("span", {
+      class: "mac-menu-title" + (menu.apple ? " mac-apple-title" : ""),
+      role: "menuitem",
+      "aria-haspopup": "true",
+      "aria-expanded": W.menu === menu.id ? "true" : "false",
+      text: menu.apple ? "" : menu.title,
+      "aria-label": menu.apple ? "Apple menu" : menu.title,
+      "data-menu": menu.id,
+      "data-action": "menu-" + menu.id,
+    });
+    if (menu.apple) title.append(el("span", { class: "mac-apple", "aria-hidden": "true" }));
+    title.onclick = () => toggleMenu(menu.id);
+    title.onmouseenter = () => { if (W.menu !== null && W.menu !== menu.id) openMenu(menu.id); };
+    wrap.append(title);
+    if (W.menu === menu.id) {
+      const box = el("div", { class: "mac-menu", role: "menu", "data-menu-panel": menu.id });
+      for (const item of menu.items) box.append(menuItem(item, menu.id));
+      wrap.append(box);
+    }
+    W.menubar.append(wrap);
+  }
+  W.menubar.append(el("span", { class: "mac-spacer" }));
+  const lamp = el("span", {
+    class: "mac-lamp-slot",
+    "data-action": "open-session",
+    title: "Operator session",
+    "aria-label": "Operator session status",
+  }, el("span", { class: "mac-lamp " + (!STATUS ? "idle" : STATUS.degraded ? "off" : "on") }));
+  lamp.onclick = () => openWindow("session");
+  W.menubar.append(lamp, el("span", { class: "mac-clock", text: clockText() }));
+}
+// ---------------------------------------------------------- session/about
+async function paintSession(body) {
+  body.append(panel(strong("Installation"), statusStrip()));
+  body.append(tokenPanel());
+  body.append(panel(strong("Notes"),
+    warn("The operator token is held in this tab's memory only. Closing the tab logs the session out; nothing is written to cookies, storage or the URL."),
+    warn("Controls across the console are inert until it is set, and no request leaves this page before then.")));
+}
+function paintAbout(body) {
+  const s = STATUS || {};
+  body.append(panel(strong("Surveyor Console"),
+    el("p", { text: "One installation, one investigation." }),
+    table(["Field", "Value"], [
+      ["Build", s.build && s.build.commit ? s.build.commit + (s.build.local ? " (local)" : "") : "unknown"],
+      ["Provisioned", s.provisioned === false ? "no" : s.provisioned ? "yes" : "unknown"],
+      ["Operator token", s.operator_token_set ? "set on the installation" : "not set"],
+      ["Chain", s.degraded ? "degraded" : "healthy"],
+    ])));
+  body.append(panel(strong("Credits"),
+    el("p", { text: "Platinum chrome after Mac OS 9. ChicagoFLF is public domain (Robin Casady); the survey and its driver are unchanged by the console." })));
+}
+function paintHelp(body) {
+  body.append(panel(strong("The console")));
+  body.append(el("p", { text: "Every day-2 action lives in a window. Open one from the View menu, drag it by its title bar, close it with the left box, zoom it with the right box." }));
+  body.append(ul([
+    "Home \\u2014 installation state and outstanding work",
+    "Providers \\u2014 the chain, keys, OAuth consent",
+    "Corpus \\u2014 upload, drain, mirror vs held lanes",
+    "Submissions \\u2014 source traffic, threads, consent, break-glass reveal",
+    "Engine \\u2014 angles, research lines, snapshots",
+    "Reports \\u2014 gates and publication",
+    "Compliance \\u2014 retention, breach, notices, residency, audit",
+    "Case File \\u2014 the dossier and notes",
+    "Launch \\u2014 launch pack, telemetry, provision, re-seal, teardown",
+  ]));
+  body.append(panel(strong("Token"),
+    el("p", { text: "The operator token is typed once per session in the Operator Session window (Apple menu). It is never stored." })));
+}
+function ul(items) {
+  const list = el("ul", {});
+  for (const item of items) list.append(el("li", { text: item }));
+  return list;
 }
 // ---------------------------------------------------------------- home
 async function paintHome(body) {
@@ -1385,24 +1667,57 @@ const PAINTERS = {
   compliance: paintCompliance,
   case: paintCase,
   launch: paintLaunch,
+  session: paintSession,
+  about: paintAbout,
+  help: paintHelp,
 };
+function knownWindow(id) {
+  if (PAINTERS[id]) return true;
+  return false;
+}
 function render() {
-  const section = currentSection();
-  const body = el("div", {});
-  app.replaceChildren(
-    el("div", { class: "os9-titlebar" },
-      el("span", { class: "os9-lamp " + (STATUS && STATUS.degraded ? "off" : "on") }),
-      "Surveyor Console"),
-    el("div", { class: "os9-body" },
-      statusStrip(), tokenPanel(), nav(), body));
-  Promise.resolve()
-    .then(() => PAINTERS[section](body))
-    .catch((e) => { body.append(warn("Section failed: " + errorText(e))); });
+  W.live = {};
+  const desktop = el("div", { class: "mac-desktop" });
+  W.open.forEach((id, i) => {
+    const built = windowNode(id);
+    W.live[id] = { node: built.node };
+    built.node.setAttribute("style", geometryStyle(id, 10 + i));
+    built.node.setAttribute("class", "mac-window" + (i === W.open.length - 1 ? "" : " inactive"));
+    const painter = PAINTERS[id];
+    Promise.resolve()
+      .then(() => painter ? painter(built.content) : built.content.append(warn("No such window.")))
+      .catch((e) => { built.content.append(warn("Window failed: " + errorText(e))); });
+    desktop.append(built.node);
+  });
+  const bar = el("nav", { class: "mac-menubar", role: "menubar", "aria-label": "Menu bar" });
+  W.menubar = bar;
+  app.replaceChildren(bar, desktop);
+  renderMenus();
 }
 async function boot() {
   try { STATUS = await api("/api/status"); } catch (e) { STATUS = null; }
   if (typeof window !== "undefined" && window.addEventListener) {
-    window.addEventListener("hashchange", render);
+    window.addEventListener("hashchange", () => {
+      const h = String(location.hash || "").replace(/^#/, "").split("?")[0];
+      if (knownWindow(h)) openWindow(h);
+    });
+    // Classic window shortcuts: Cmd/Command-W closes, Cmd-R refreshes.
+    window.addEventListener("keydown", (e) => {
+      if (!e) return;
+      const cmd = e.metaKey || e.ctrlKey;
+      if (cmd && e.key === "w" && W.open.length > 0) { closeFrontWindow(); e.preventDefault(); }
+      else if (cmd && e.key === "r") { render(); e.preventDefault(); }
+      else if (e.key === "Escape" && W.menu !== null) closeMenus();
+    });
+  }
+  const h = String(location.hash || "").replace(/^#/, "").split("?")[0];
+  // No token yet: the session window is the point of the screen (F3), and
+  // it opens in front of whatever deep link was requested.
+  if (!TOKEN) W.open.push("session");
+  if (knownWindow(h)) W.open.push(h);
+  else if (TOKEN) W.open.push("home");
+  for (const id of W.open) {
+    if (!W.pos[id]) W.pos[id] = defaultGeometry();
   }
   render();
   // A light status poll: state changes (provisioning, degradation) appear
@@ -1411,11 +1726,7 @@ async function boot() {
     setInterval(() => {
       api("/api/status").then((s) => {
         STATUS = s;
-        const node = statusNode;
-        if (node) {
-          const fresh = statusStrip();
-          node.replaceChildren(...fresh.children);
-        }
+        renderMenus();
       }).catch(() => {});
     }, 30000);
   }

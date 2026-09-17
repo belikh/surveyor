@@ -22,8 +22,8 @@ every recipient, and recorded receipts document the disclosure honestly
   pass, gated before it reaches any mirror. Native parsing accuracy is
   [measured and published](evidence/ocr-accuracy/); the model-pass lanes on
   scans remain a recorded gap there, not a claim.
-- **Operator console** — a browser console at `/console` for every day-2
-  action: providers and keys, corpus upload and drain, submissions and
+- **Operator console** — a Platinum desktop at `/console` (menus, draggable
+  windows, a session log-in) for every day-2 action: providers and keys, corpus upload and drain, submissions and
   consent, angle review, research lines, report gates and publication,
   retention, breach, notices, residency, launch pack and teardown. The
   operator token lives in page memory only; controls are inert without it.
@@ -103,6 +103,7 @@ agency, honest threat modelling, corpus purity, Australian English.
 src/lib/      domain logic (vault, pow, ingest, engine, reports, serve)
 src/routes/   HTTP surfaces (intake, corpus, engine, reports, launch)
 src/frontend/ served shells (setup wizard, survey, operator console)
+assets/       bundled fonts (public-domain ChicagoFLF; see assets/fonts/README.md)
 test/         vitest suites, one per domain
 scripts/      smoke + local-runtime verification
 ```

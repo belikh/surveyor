@@ -95,8 +95,10 @@ pass through a model, a log, or this runbook.
 
 ## 3. Operator console
 
-Every day-2 action lives in the console at `/console`: paste the operator
-token once per browser session (memory only — no cookie, no storage, no URL
+Every day-2 action lives in the console at `/console` — a Mac OS 9 desktop:
+every section opens in its own draggable window (View menu; close and zoom
+boxes on each title bar). Paste the operator token once per browser session in
+the Operator Session window (memory only — no cookie, no storage, no URL
 entry), and the sections enable. The console covers the whole runbook:
 
 - **Home** — provisioning state, degraded warnings, deployed build commit,

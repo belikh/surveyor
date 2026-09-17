@@ -106,7 +106,7 @@ describe("console driver (#67)", () => {
       "/api/corpus/drain",
       "authorization",
       "x-filename",
-      "Set the operator token above",
+      "Set the operator token in the Session window",
     ]) {
       expect(CONSOLE_JS, needle).toContain(needle);
     }
