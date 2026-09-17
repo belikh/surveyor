@@ -182,6 +182,16 @@ CREATE TABLE IF NOT EXISTS retention_config (
   updated_at TEXT NOT NULL
 );
 
+-- Data-flow and residency receipts (D6, #49). Append-only snapshots of the
+-- map naming each recipient (Cloudflare, each configured BYOK provider) and
+-- the regions it may process in. Unsealed: recipients and regions are
+-- operator configuration, and an auditor must be able to read the record.
+CREATE TABLE IF NOT EXISTS data_flow_receipts (
+  id TEXT PRIMARY KEY,
+  map_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 -- Breach assessments (Privacy Act Part IIIC). The facts and decision are
 -- sealed in record_envelope; aware_at and decision stay plaintext so the
 -- thirty-day assessment clock (s 26WH) is queryable without opening it.

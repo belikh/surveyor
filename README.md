@@ -2,7 +2,12 @@
 
 An open-source, bring-your-own-keys, Cloudflare-native investigation
 platform. One installation per investigation, fully self-contained in your
-own Cloudflare account.
+own Cloudflare account — but not in Australia: Cloudflare offers no
+Australian storage jurisdiction for D1 or R2 (European Union, United States
+and FedRAMP only), so information may be stored and processed outside
+Australia. The installation's data-flow map (`GET /api/residency`) names
+every recipient, and recorded receipts document the disclosure honestly
+(ADR-0019).
 
 - **Anonymous submissions** — a survey-framed wizard with proof-of-work and
   optional human-verification. Identifying originals are never stored, with
@@ -94,3 +99,7 @@ each names the claim that changed.
   (ADR-0012): the raw file is held in private R2 until its lane drains, then
   deleted, with the scheduled sweep enforcing the window when no drain comes.
   The quick-start bullets now carry that exception.
+- **2026-09-17** — "fully self-contained in your own Cloudflare account" could
+  be read as "in Australia". It is not: Cloudflare offers no Australian
+  storage jurisdiction for D1 or R2. The introduction now says so and names
+  the data-flow map and receipts (D6, #49).

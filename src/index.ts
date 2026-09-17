@@ -67,6 +67,11 @@ import reports from "./routes/reports";
 import breach from "./routes/breach";
 import notices from "./routes/notices";
 import retention from "./routes/retention";
+import residency from "./routes/residency";
+import {
+  collectEnvDataFlowMap,
+  recordDataFlowReceipt,
+} from "./lib/residency";
 import { evaluateAll } from "./lib/schedule";
 import { sweepRawBytes } from "./lib/retention";
 import { REQUIRED_SCOPES, REVOCATION_GUIDANCE } from "./lib/scopes";
@@ -275,6 +280,15 @@ app.use("/api/retention/*", async (c, next) => {
   await next();
 });
 app.route("/api/retention", retention);
+
+// Residency and data-flow map: names the operator's providers and their
+// models, so the read and the recorded receipts are operator-only.
+app.use("/api/residency/*", async (c, next) => {
+  const denied = await requireOperator(c);
+  if (denied) return c.json(deny(denied), denied);
+  await next();
+});
+app.route("/api/residency", residency);
 
 // Launch pack: generation and rotation are operator-only; the slug
 // landing page is public (it is the survey's front door).
@@ -908,7 +922,8 @@ app.post("/api/provision", async (c) => {
   const parsed = ProvisionBodySchema.safeParse(await c.req.json());
   if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
   const p = parsed.data;
-  await getState(c.env); // boot the schema (provision receipt table)
+  const st = await getState(c.env); // boot the schema (receipt tables)
+  const setup = await st.loadSetup();
   const api = createCloudflareApi({
     accountId: p.account_id,
     scriptName: p.script_name,
@@ -927,7 +942,13 @@ app.post("/api/provision", async (c) => {
     )
       .bind(JSON.stringify(receipt), now)
       .run();
-    return c.json({ ok: true, receipt });
+    // The provisioning receipt is accompanied by a data-flow receipt naming
+    // Cloudflare and each BYOK provider configured at provision time (D6).
+    const dataFlow = await recordDataFlowReceipt(
+      c.env.DB,
+      collectEnvDataFlowMap(c.env, setup),
+    );
+    return c.json({ ok: true, receipt, data_flow: dataFlow });
   } catch (err) {
     const step = err instanceof ProvisionError ? err.step : "unknown";
     return c.json(

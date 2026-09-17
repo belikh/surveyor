@@ -118,6 +118,29 @@ queue delivery and retry, Workflow execution and persisted resume, and R2
 range and delete behaviour. Every receipt names what it exercised;
 failures name the primitive (`queue:*`, `workflow:*`, `r2:*`).
 
+## 5c. Residency and data flows
+
+The installation runs in your Cloudflare account, not in Australia:
+Cloudflare offers no Australian storage jurisdiction for D1 or R2 (European
+Union, United States and FedRAMP only), and Workers execute on the global
+edge. Provisioning configures no jurisdiction restriction, so information
+may be stored and processed outside Australia, and Surveyor does not claim
+otherwise (ADR-0019). The generated privacy and collection notices state the
+same facts for sources.
+
+`GET /api/residency` (operator-only) returns the live map: every recipient
+that may handle personal information — Cloudflare's services and each
+configured BYOK provider whose key is present — with the regions each may
+process in, the source of each region statement (a platform fact, the
+committed provider review, or not recorded) and whether the recipient may
+process data overseas. The map updates as providers are added or removed.
+
+`POST /api/residency/receipts` records an append-only snapshot of the map;
+`GET /api/residency/receipts` lists the receipts and
+`GET /api/residency/receipts/<id>/export` downloads the markdown receipt for
+the APP 8 record. Provisioning records a receipt automatically, naming
+Cloudflare and any provider already configured at that point.
+
 ## 6. Teardown
 
 The wizard's teardown screen resets local state and reports exactly what
@@ -186,3 +209,7 @@ each names the claim that changed.
   per data category with safe defaults and bounds (D1, #44): the default is
   unchanged, the operator configures it through `GET/PUT /api/retention`, and
   the sweep receipt names the windows it enforced.
+- **2026-09-17** — "runs in your own Cloudflare account" could be read as
+  "in Australia". It is not: Cloudflare offers no Australian storage
+  jurisdiction for D1 or R2. Section 5c now states the cross-border posture
+  and the data-flow map and receipts (D6, #49).
