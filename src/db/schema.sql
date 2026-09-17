@@ -267,3 +267,30 @@ CREATE TABLE IF NOT EXISTS right_of_reply_attempts (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_reply_attempts_report ON right_of_reply_attempts(report_type, version);
+
+-- Recording provenance (C8): the metadata carried by audio/video evidence,
+-- captured with the recording at ingest. Free text (recorder, date, place)
+-- is sealed; jurisdiction and consent status stay plaintext so the
+-- publication gate can decide without opening a record. A recording with no
+-- row is unknown, so the gate treats it as jurisdiction-sensitive.
+CREATE TABLE IF NOT EXISTS recording_provenance (
+  doc_id TEXT PRIMARY KEY,
+  jurisdiction TEXT NOT NULL,
+  consent_status TEXT NOT NULL,
+  detail_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- Recording reviews (C8): one legal review per report version and recording,
+-- tied to the version it releases like the defamation gate. Reviewer and
+-- notes are sealed; the version link stays plaintext for the gate check.
+CREATE TABLE IF NOT EXISTS recording_reviews (
+  id TEXT PRIMARY KEY,
+  report_type TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  doc_id TEXT NOT NULL,
+  record_envelope TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (report_type, version, doc_id)
+);
+CREATE INDEX IF NOT EXISTS ix_recording_reviews_version ON recording_reviews(report_type, version);

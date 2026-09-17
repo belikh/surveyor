@@ -761,6 +761,8 @@ const RESEAL_COLUMNS: Array<{
   { table: "research_lines", column: "findings_envelope", key: "id" },
   { table: "report_versions", column: "body_envelope", key: "id" },
   { table: "report_entries", column: "entry_envelope", key: "id" },
+  { table: "recording_provenance", column: "detail_envelope", key: "doc_id" },
+  { table: "recording_reviews", column: "record_envelope", key: "id" },
 ];
 
 app.post("/api/audit/reseal", async (c) => {

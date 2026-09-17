@@ -29,6 +29,11 @@ import {
   recordLegalReview,
   recordReplyAttempt,
 } from "../lib/legal";
+import {
+  RecordingGateUnmet,
+  RecordingReviewBodySchema,
+  recordRecordingReview,
+} from "../lib/recordings";
 
 export const reports = new Hono<{ Bindings: Bindings }>();
 
@@ -142,6 +147,16 @@ reports.post("/:type/publish", async (c) => {
     if (err instanceof GatesUnmet) {
       return c.json({ error: "gates_unmet", unmet: err.unmet }, 409);
     }
+    if (err instanceof RecordingGateUnmet) {
+      return c.json(
+        {
+          error: "recording_gate_unmet",
+          unmet: err.unmet,
+          doc_ids: err.doc_ids,
+        },
+        409,
+      );
+    }
     if (err instanceof LegalGateUnmet) {
       return c.json({ error: "legal_gate_unmet", unmet: err.unmet }, 409);
     }
@@ -184,6 +199,28 @@ reports.get("/:type/legal", async (c) => {
     pending_version: pendingVersion(row.current_version),
     ...surface,
   });
+});
+
+// Recording gate (C8): the legal review of one cited recording, tied to the
+// pending version like the defamation-side review. A review for an earlier
+// version never releases this one.
+reports.post("/:type/recording", async (c) => {
+  const app = await getState(c.env);
+  const t = reportType(c);
+  if (!t) return notFound(c);
+  const parsed = RecordingReviewBodySchema.safeParse(await c.req.json());
+  if (!parsed.success) return c.json({ error: "invalid_body" }, 422);
+  const row = await reportRow(c.env.DB, t);
+  const recorded = await recordRecordingReview(
+    c.env.DB,
+    app.kit,
+    t,
+    pendingVersion(row.current_version),
+    parsed.data,
+  );
+  if (!recorded) return c.json({ error: "not_found" }, 404);
+  await app.audit("reports:recording-reviewed");
+  return c.json(recorded, 201);
 });
 
 reports.post("/:type/reply", async (c) => {

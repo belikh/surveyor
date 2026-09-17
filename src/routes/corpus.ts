@@ -21,6 +21,12 @@ import { RAW_RETRY_WINDOW_MS } from "../lib/retention";
 import type { QuarantineHit } from "../lib/intake";
 import { delimitedToText } from "../lib/tables";
 import { storeBody } from "../lib/upload";
+import {
+  captureRecordingProvenance,
+  isRecordingLane,
+  listRecordingProvenance,
+  parseRecordingProvenanceHeader,
+} from "../lib/recordings";
 
 export const corpus = new Hono<{ Bindings: Bindings }>();
 
@@ -49,6 +55,30 @@ corpus.post("/", async (c) => {
   if (typed.lane === "rejected") {
     return c.json({ error: "rejected", detail: typed.reason }, 422);
   }
+
+  // Recording provenance (C8) travels in a header, never the request line:
+  // a malformed value, or one attached to a non-recording, fails the ingest
+  // before any bytes land. Absent provenance is allowed — the recording is
+  // stored unknown and the publication gate holds it for legal review.
+  const provenance = parseRecordingProvenanceHeader(
+    c.req.header("x-recording-provenance"),
+  );
+  if (!provenance.ok) {
+    return c.json(
+      { error: "invalid_recording_provenance", detail: provenance.error },
+      422,
+    );
+  }
+  if (provenance.value && !isRecordingLane(typed.lane)) {
+    return c.json(
+      {
+        error: "invalid_recording_provenance",
+        detail: "provenance only applies to audio and video recordings",
+      },
+      422,
+    );
+  }
+
   const body = c.req.raw.body;
   if (!body) return c.json({ error: "invalid_body", detail: "empty body" }, 422);
 
@@ -161,6 +191,15 @@ corpus.post("/", async (c) => {
     ),
     ...entityIndexStatements(c.env.DB, indexRows),
   ]);
+  if (provenance.value) {
+    await captureRecordingProvenance(
+      c.env.DB,
+      app.kit,
+      id,
+      provenance.value,
+      now,
+    );
+  }
   return c.json({
     id,
     lane: decision.lane,
@@ -176,12 +215,29 @@ corpus.get("/", async (c) => {
     "SELECT id, filename, lane, status, verdict, reason, created_at FROM corpus_docs ORDER BY created_at DESC",
   ).all<Record<string, string | null>>();
   const sealed = unwrap(rows);
+  // Recording provenance, opened for the operator beside the media it
+  // describes (the at-rest record is sealed).
+  const provenance = await listRecordingProvenance(c.env.DB, app.kit);
   // Filenames are sealed at rest: decrypt for the operator listing.
   const docs = await Promise.all(
-    sealed.map(async (d) => ({
-      ...d,
-      filename: await openText(app.kit, String(d.filename)),
-    })),
+    sealed.map(async (d) => {
+      const recording = provenance.get(String(d.id));
+      return {
+        ...d,
+        filename: await openText(app.kit, String(d.filename)),
+        ...(recording
+          ? {
+              recording: {
+                recorder: recording.recorder,
+                recorded_at: recording.recorded_at,
+                place: recording.place,
+                jurisdiction: recording.jurisdiction,
+                consent_status: recording.consent_status,
+              },
+            }
+          : {}),
+      };
+    }),
   );
   return c.json({ docs });
 });
