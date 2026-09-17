@@ -9,7 +9,6 @@
 import { z } from "zod";
 import { searchMirror } from "./rounds";
 import { flagSuspicious } from "./engine";
-import { unwrap } from "./evidence";
 import { openText, sealText, type VaultKit } from "./vault";
 import { recordTurn } from "./telemetry";
 import type { ModelClient } from "./serve";
@@ -308,8 +307,9 @@ export type FinishResult =
 
 /**
  * The one completion path, shared by the operator route and the workflow:
- * citations are the price of completion, every cited doc must exist in the
- * mirror, and suspicious findings are held rather than stored complete.
+ * citations are the price of completion, every cited doc must be in the
+ * mirror and every snippet must occur verbatim in its gated text, and
+ * suspicious findings are held rather than stored complete.
  */
 export async function finishLine(
   db: D1Database,
@@ -335,17 +335,31 @@ export async function finishLine(
   if (completion.citations.length === 0) {
     return { ok: false, error: "citations_required" };
   }
-  const known = new Set(
-    unwrap(
-      await db.prepare("SELECT id FROM corpus_docs").all<{ id: string }>(),
-    ).map((r) => r.id),
-  );
-  const unknown = completion.citations.find((ci) => !known.has(ci.doc_id));
-  if (unknown) {
-    return { ok: false, error: "unknown_citation", detail: unknown.doc_id };
-  }
   if (line.spend_used > line.spend_cap) {
     return { ok: false, error: "over_cap" };
+  }
+  // Validate each citation against its source text, never against the
+  // existence of a row: the snippet must occur verbatim in the mirrored
+  // text, so a composed quote cannot complete a line.
+  for (const ci of completion.citations) {
+    const row = await db
+      .prepare(
+        `SELECT text_envelope FROM corpus_docs WHERE id = ? AND ${MIRRORED}`,
+      )
+      .bind(ci.doc_id)
+      .first<{ text_envelope: string }>();
+    if (!row) {
+      return { ok: false, error: "unknown_citation", detail: ci.doc_id };
+    }
+    let text: string;
+    try {
+      text = await openText(kit, row.text_envelope);
+    } catch {
+      return { ok: false, error: "invalid_citation", detail: ci.doc_id };
+    }
+    if (!text.includes(ci.snippet)) {
+      return { ok: false, error: "invalid_citation", detail: ci.doc_id };
+    }
   }
   const flags = flagSuspicious(completion.findings, completion.citations);
   const status = flags.length > 0 ? "held" : "complete";
