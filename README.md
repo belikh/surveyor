@@ -46,7 +46,9 @@ on the runner, `niro/harness/seed.sh` creates the test baseline and generates
 the credentials Niro consumes, and `niro/scope.yaml` authorizes only the
 loopback listener. It never creates branches or pull requests, runs only when
 dispatched by hand, and publishes the penetration-test report and knowledge
-bundle as 30-day artifacts.
+bundle as 30-day artifacts. Completed reports are promoted to
+[published evidence](evidence/niro/) with their date, scope and provenance; the
+latest is the [2026-09-16 run](evidence/niro/2026-09-16-penetration-test.md).
 
 DeepSeek is the default model, reached through the Copilot agent's
 OpenAI-compatible BYOK provider. Configure (and later rotate) the credentials
