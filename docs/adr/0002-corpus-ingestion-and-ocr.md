@@ -76,3 +76,12 @@ what it did not.
   ADR-0011 but not built; scans are rasterised in the browser and OCR'd
   page-at-a-time, and the open PDF page-to-image unknown is answered by
   ADR-0011.
+- **Amendment (2026-09-17, campaign C1/C2)**: the named parser libraries
+  (`pdfjs-serverless`/`unpdf`, `mammoth`, SheetJS, JSZip) are not used. The
+  digital lanes are implemented dependency-free in `src/lib/pdf.ts`,
+  `src/lib/zip.ts`, `src/lib/xml.ts` and `src/lib/ooxml.ts` over workerd's
+  `DecompressionStream`, with the model pass as the fallback. Trade-off: no new
+  supply-chain surface inside the Worker, at the cost of narrower format
+  coverage (form XObjects, LZW/predictor streams, Type0 fonts without
+  ToUnicode, encrypted PDFs and non-OOXML office variants fall back to the
+  model pass); the limits are documented in code and in the C1/C2 receipts.

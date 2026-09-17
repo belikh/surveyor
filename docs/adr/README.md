@@ -39,20 +39,15 @@ and the audio transcription options.
 
 ## Known deviations from these decisions
 
-The campaign build (#1) is in flight; this list records where the code still
-falls short of a decision, with the owning ticket. Where a ticket is closed, the
-fix is on its stream branch and lands when the campaign merges.
+The campaign build (#1) merged to `main` on 2026-09-17. This list records where
+the code still falls short of a decision, with the owning ticket.
 
-- **0002 / 0011** — the digital-document lanes drain through
-  `env.AI.toMarkdown` plus vision OCR; native PDF/DOCX/XLSX/PPTX parsing is
-  C1 (#32) and C2 (#33); the browser rasterisation path ships with the served
-  PDF.js worker asset (A5, #6). The wizard does not yet ask for capability tags
-  (B5, #23). The two-page multi-modal rescue is not built (superseded by
-  ADR-0011).
-- **0002 / 0012** — corpus uploads stream through the Worker into R2 through a
-  counting, capping transform, with the filename in the `x-filename` header and
-  native text decoded from the counted stream (A15, #16); submitter attachments
-  stream the same way (A14, #15).
+- **0002 / 0011** — the wizard does not yet ask for capability tags (B5, #23);
+  the two-page multi-modal rescue is not built (superseded by ADR-0011).
+  Digital lanes parse natively (C1 #32, C2 #33) with the model pass as the
+  fallback, the browser rasterisation path ships with the served PDF.js worker
+  asset (A5, #6), and the dependency-free parser choice is recorded in 0002's
+  amendment.
 - **0003** — research lines exist with citation validation and spend caps but do
   not research autonomously; a line completes through the operator's findings
   POST. The corpus tool loop is B1 (#19), spend enforcement B2 (#20), finding
@@ -66,17 +61,25 @@ fix is on its stream branch and lands when the campaign merges.
   that code change is not yet claimed by a ticket.
 - **0005 / 0009** — provision and teardown have routes and receipts but have not
   been exercised against a live Cloudflare account (A16, #17; A17, #18), and
-  re-provisioning is not yet non-destructive (A2, #3).
-- **0012** — the raw-byte deletion window is enforced by the scheduled sweep
-  (A3, #4) and submitter attachments stream into R2 (A14, #15).
+  re-provisioning is not yet non-destructive (A2, #3). The reseal path still
+  names the pre-campaign sealed-column set, so A2 must extend it alongside the
+  audit's list.
 - **0015** — angles still queue for explicit approval rather than
   auto-approving unless flagged (B-series engine build, #19–#21), and it is the
   scheduled digest that still auto-publishes where gates are met (see 0004).
 - **0017 / 0018** — the snapshot store and web-citation validation are B7
   (#25); fetched-text delimiters and injection flagging are B8 (#26); the
-  Tavily/Parallel search layer is B6 (#24); provider-terms review is B10 (#27).
-- **0019** — the retention and deletion engine is D1 (#44) and D2 (#45); the
-  breach workflow is D3 (#46); notices are D4 (#47); consent is D5 (#48);
-  residency receipts are D6 (#49); the legal publish gate is D7 (#50); the
-  quality-evidence artefacts that gate the public claim are D8 (#51), D9 (#52),
-  D10 (#53) and D11 (#54).
+  Tavily/Parallel search layer is B6 (#24). B10's provider-terms review is
+  drafted in `docs/research/provider-terms-review.md` and awaits human legal
+  sign-off (#27, `ready-for-human`).
+- **0019** — the retention and deletion engine is D1 (#44) and D2 (#45);
+  residency receipts are D6 (#49); the quality-evidence artefacts that gate the
+  public claim are D8 (#51), D9 (#52) and D11 (#54).
+- **0012** — resolved: the raw-byte deletion window is enforced by the
+  scheduled sweep (A3, #4), both upload paths stream without buffering the body
+  (A14 #15, A15 #16), and the ciphertext audit covers every sealed column in the
+  schema (A13, #14).
+- **0019** — implemented in the campaign and no longer deviating: breach
+  assessment and NDB workflow (D3, #46), privacy and collection notices (D4,
+  #47), sensitive-category consent (D5, #48), the publication legal gate (D7,
+  #50) and the published Niro report evidence (D10, #53).

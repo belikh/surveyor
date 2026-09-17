@@ -1,13 +1,16 @@
 // Native OOXML text extraction: OOXML files are ZIP containers of XML
 // parts, so parsing needs no model pass and no third-party library. Only
-// the parts that carry evidence text are read. Anything malformed throws;
-// the lane treats that as "native parse failed" and falls back to the
-// model pass.
+// the parts that carry evidence text are read. A part that cannot be
+// opened or decoded throws; the lane treats that as "native parse failed"
+// and falls back to the model pass. Malformed markup inside a part ends
+// the XML scan with what was read so far (see xml.ts), so a truncated
+// container yields partial text rather than a fallback.
 //
 // Fidelity boundaries, flagged rather than hidden:
 // - XLSX is sampled at MAX_SHEET_ROWS rows per sheet and MAX_TABLE_CHARS
 //   characters in total, with a truncation marker written into the text;
 // - PPTX text runs carry no layout (ADR-0002's accepted loss);
+// - malformed or truncated markup yields the text scanned before the break;
 // - comments, notes and macros are not read.
 
 import { openZip, type ZipArchive } from "./zip";

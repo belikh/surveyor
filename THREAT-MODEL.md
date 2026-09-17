@@ -46,8 +46,10 @@ A database/bucket leak must reveal nothing identifying.
 
 - **Mitigations**: free text is pre-scrubbed and anonymised in request memory
   before storage; only AES-256-GCM envelopes are written; third-party names live
-  only in the encrypted quarantine; raw submitter originals are never persisted;
-  access codes are stored as HMAC only; no IP/UA/referrer logged.
+  only in the encrypted quarantine; raw submitter attachment originals are the
+  documented ADR-0012 exception — held unencrypted in private R2 only until the
+  lane drains or the scheduled retention sweep deletes them (A3, #4); access
+  codes are stored as HMAC only; no IP/UA/referrer logged.
 - **Residual risk**: sealed text is decryptable by anyone holding
   `ENCRYPTION_KEY`; a compromised Worker/runtime can decrypt in memory. Metadata
   (submission count, timestamps, lengths) is not encrypted. Stylometry could
@@ -189,8 +191,9 @@ and not carried into this repository).
   provider over TLS (BYOK); Cloudflare terminates TLS and hosts D1/R2/Queues.
 - Detection flags are probabilistic and never auto-actioned.
 - The FTS mirror holds gated text in plaintext for search.
-- Held corpus bytes are unencrypted in R2 (T3) with a bounded-retention
-  requirement that is not yet implemented.
+- Held corpus bytes are unencrypted in R2 (T3) with a bounded-retention window
+  enforced by the scheduled raw-byte sweep, which deletes expired objects and
+  receipts the deletion (A3, #4).
 - `workers.dev` may be blocked in some jurisdictions; custom domains are out of
   scope in v1 (anonymity trade-off documented).
 - Stylometry is a signal, not proof, and is admin-only.

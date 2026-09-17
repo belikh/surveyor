@@ -31,7 +31,7 @@ The platform ships as one installation per investigation. Security fixes land on
 | Untrusted content is data, never instructions | Delimited framing, read-only corpus tools, Zod at every boundary, output policing, `textContent`-only rendering |
 | Mirror purity | Mirror scan test proves zero entity names present |
 | Flags gate, and never act unattended | A flagged angle lists as `held` and approval is refused until a reviewer clears the flags; a flagged research line stores as `held` and is excluded from evidence; flagged model prose falls back to the deterministic body. Flags never publish, delete, or rewrite by themselves |
-| At-rest storage is ciphertext-only where audited | `/api/audit/ciphertext` inspects every sealed column by the schema conventions (`*_envelope` plus `filename`), reports envelope counts and malformed counts without decrypting, and fails with a `missing` list when a sealed column is outside its coverage: `messages.body_envelope`, `corpus_docs.text_envelope`, `corpus_docs.filename`, `entities.name_envelope`, `attachments.filename`, `angles.rationale_envelope`, `research_lines.findings_envelope`, `report_versions.body_envelope`, `report_entries.entry_envelope` |
+| At-rest storage is ciphertext-only where audited | `/api/audit/ciphertext` inspects every sealed column by the schema conventions (`*_envelope` plus `filename`) across all tables; the receipt's `inspected` list names the operative set, it reports envelope counts and malformed counts without decrypting, and it fails with a `missing` list when a sealed column is outside its coverage (a schema-wide coverage test gates new sealed columns into the audit) |
 | Corpus custody | Constitution Principle XI ledger; raw held bytes in the operator's private R2 with a bounded retention window enforced by the scheduled sweep |
 
 ## OWASP LLM Top 10 mapping
@@ -72,10 +72,10 @@ The platform ships as one installation per investigation. Security fixes land on
   request-controlled identifiers, and are covered by route tests. There is no
   automated grep gate.
 - **SSRF** — custom provider base URLs are validated at save time (https to a
-  public host) and the save-time probe refuses redirects; the provisioner calls
-  only Cloudflare API endpoints. The live model-call client does not yet refuse
-  redirects (#13) — until it does, a configured provider that redirects a call
-  could send the request (and its key) to another host.
+  public host that is not a private or loopback address); the save-time probe
+  and the live model-call client both refuse redirects (A12, #13), so a
+  configured provider that redirects a call cannot carry the request — or its
+  key — to another host. The provisioner calls only Cloudflare API endpoints.
 
 ## Secrets and tokens
 
@@ -83,10 +83,10 @@ The platform ships as one installation per investigation. Security fixes land on
   rotation) and never shown; `OPERATOR_TOKEN` is the operator's own choice,
   entered at boot. No code path returns a secret value: primary receipts carry
   slot names and booleans only, and values are never persisted to D1.
-- `GROQ_API_KEY`, `TOKENROUTER_API_KEY` — operator-supplied through the
-  wizard's key entry; written to the secret store; never persisted to D1.
-  `TURNSTILE_SECRET` is set the same way as the other master secrets and never
-  leaves the store.
+- `GROQ_API_KEY`, `TOKENROUTER_API_KEY`, `TAVILY_API_KEY`, `PARALLEL_API_KEY`
+  — operator-supplied through the wizard's key entry; written to the secret
+  store; never persisted to D1. `TURNSTILE_SECRET` is set the same way as the
+  other master secrets and never leaves the store.
 - Token-paste installs: use a short-lived scoped token and revoke it immediately
   after provisioning (guidance is served by the installation).
 - Never paste a secret value into a transcript, issue, commit, test, or report.
