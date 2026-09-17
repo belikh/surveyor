@@ -83,7 +83,8 @@ bucket** until drained.
   the operator's account; the key is a random doc id; no application logging of
   file contents; raw bytes are deleted on successful drain; the scheduled
   raw-byte sweep (`src/lib/retention.ts`, A3) deletes anything no drain reached
-  once the 24 h retry window lapses and records a deletion receipt in `audit`; a
+  once the configured retention window lapses (24 h by default; per-category
+  and bounded, D1 #44) and records a deletion receipt in `audit`; a
   lifecycle rule must abort incomplete multipart uploads; failed files stay held
   with a reason and are operator-deletable.
 - **Residual risk**: the window between upload and drain exposes raw bytes to
@@ -144,7 +145,12 @@ bucket** until drained.
 
 - **Mitigations**: manual approval is the default; automatic gates are opt-in;
   gate config is stored with the report, never accepted at publish; published
-  history is append-only; held lines are excluded.
+  history is append-only; held lines are excluded. The cite-bound enforcement
+  is measured (`evidence/report-quality/`, D9 #52): across the fixture run no
+  report body carried a quote absent from its source, drafts annotated and
+  versions stripped uncited claims, marker-laden prose fell back to the
+  deterministic render, and held lines or held documents reached no report
+  type.
 - **Residual risk**: an operator who enables full-dynamic on a poisoned corpus
   can publish defamatory material. Legal/defamation gates and a lawyer review
   insertion point remain **fog** (unresolved, out of scope for now).
@@ -201,7 +207,20 @@ and not carried into this repository).
 
 ## 5. Open unknowns (need a live trial)
 
-- OCR accuracy on poor scans (bake-off) and the PDF page-to-image render step.
+- OCR accuracy on poor scans. The deterministic lanes are measured and
+  published (`evidence/ocr-accuracy/`, D8 #51): the native parsers and the
+  PDF.js text layer reproduce the fixture corpus exactly within their
+  supported subset, and an LZW-filtered PDF exercises the model fallback.
+  Vision OCR and `env.AI.toMarkdown` accuracy on scans still need a live
+  Workers AI run — the evidence records that as an explicit gap, not a
+  number. The PDF page-to-image render step is resolved by ADR-0011
+  (browser rasterisation).
+- Report quality on live model prose. The pipeline's enforcement is measured
+  and published (`evidence/report-quality/`, D9 #52): fabricated quotes, held
+  lines, uncited claims and injection markers reach no draft or version in
+  the fixture run. Whether a live provider proposes valid citations and
+  covers the supportable facts is, like the OCR model lanes, only knowable
+  from a live run — the evidence records it as an explicit gap, not a number.
 - Exact minimal scoped-token permission set and deploy-button D1-migration
   reliability.
 - Workers AI per-request image/token ceiling.

@@ -58,8 +58,11 @@ what it did not.
 - Vision token cost is the dominant per-file cost driver, not CPU or storage.
 - Fidelity losses are accepted and must be flagged: PPTX text runs miss layout,
   XLSX large sheets are sampled, rescues cover only two pages.
-- **Open unknowns carried forward**: OCR accuracy on poor scans (needs a
-  measured bake-off), and the PDF page-to-image render step, which has no canvas
+- **Open unknowns carried forward**: OCR accuracy on poor scans — the
+  deterministic lanes are now measured and published in
+  `evidence/ocr-accuracy/` (D8, #51); scans and the `toMarkdown` fallback
+  still need a live Workers AI run (the evidence's recorded gap) — and the
+  PDF page-to-image render step, which has no canvas
   in Workers and must be resolved (client-side render, pre-split images, or a
   Container).
 - In-Worker Tesseract is **rejected**: it needs Web Workers or `worker_threads`,
@@ -85,3 +88,12 @@ what it did not.
   coverage (form XObjects, LZW/predictor streams, Type0 fonts without
   ToUnicode, encrypted PDFs and non-OOXML office variants fall back to the
   model pass); the limits are documented in code and in the C1/C2 receipts.
+- **Amendment (2026-09-17, campaign D8)**: the OCR-accuracy open unknown is
+  now measured for the deterministic lanes. `evidence/ocr-accuracy/` publishes
+  the fixture corpus, method and reproducible results: the native parsers and
+  the PDF.js text layer are exact across the eight-fixture corpus within their
+  supported subset (13 of 14 measurements), and the one measured miss — an
+  LZW-filtered PDF outside the native filter set — is the documented model
+  fallback working as designed. Vision OCR and `env.AI.toMarkdown` accuracy on
+  scans remain unmeasured: they need a live Workers AI account, and the
+  evidence records them as explicit gaps without numbers.

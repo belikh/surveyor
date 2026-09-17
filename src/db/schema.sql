@@ -216,6 +216,36 @@ CREATE TABLE IF NOT EXISTS attachments (
 );
 CREATE INDEX IF NOT EXISTS ix_attachments_submission ON attachments(submission_id);
 
+-- Retention windows per data category (D1, #44). One row; an absent row
+-- means the safe defaults apply. Windows are milliseconds; the API speaks
+-- whole hours. Categories that are the investigation's record are retained
+-- and have no row here — a window for them is refused with a reason.
+CREATE TABLE IF NOT EXISTS retention_config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  config_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Deletion receipts (D2, #45). One append-only row per sweep run, readable
+-- by the operator and the audit: per-category counts and the verification
+-- result (was the object confirmed gone after the delete call?). Counts
+-- only — never keys, filenames or content (constitution II).
+CREATE TABLE IF NOT EXISTS retention_sweeps (
+  id TEXT PRIMARY KEY,
+  swept_at TEXT NOT NULL,
+  receipt_json TEXT NOT NULL
+);
+
+-- Data-flow and residency receipts (D6, #49). Append-only snapshots of the
+-- map naming each recipient (Cloudflare, each configured BYOK provider) and
+-- the regions it may process in. Unsealed: recipients and regions are
+-- operator configuration, and an auditor must be able to read the record.
+CREATE TABLE IF NOT EXISTS data_flow_receipts (
+  id TEXT PRIMARY KEY,
+  map_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 -- Breach assessments (Privacy Act Part IIIC). The facts and decision are
 -- sealed in record_envelope; aware_at and decision stay plaintext so the
 -- thirty-day assessment clock (s 26WH) is queryable without opening it.

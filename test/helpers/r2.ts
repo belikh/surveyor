@@ -49,6 +49,13 @@ export class FakeR2 {
     this.store.delete(key);
   }
 
+  /** Metadata read for the retention sweep's delete verification. */
+  async head(key: string): Promise<{ key: string; size: number } | null> {
+    const value = this.store.get(key);
+    if (!value) return null;
+    return { key, size: value.byteLength };
+  }
+
   has(key: string): boolean {
     return this.store.has(key);
   }

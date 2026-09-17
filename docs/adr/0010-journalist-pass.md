@@ -50,3 +50,18 @@ digests). The operator chose to implement it.
 
 - Remediation: R7; spec FR-036
 - Related: ADR-0004 (report surface), ADR-0003 (engine/grounding)
+
+## Amendment (2026-09-17): the report-quality evaluation (D9, #52)
+
+The cite-bound and annotate-then-strip rules are now measured.
+`evidence/report-quality/` (reproduced by `npm run quality:report`) seeds a
+fixture investigation, scripts the provider outputs with a known mix of
+supportable, fabricated-snippet, unknown-document, held-document and uncited
+claims, and runs every report path over them. Across 20 measurements it
+records: zero fabricated quotes delivered (every quote in a body occurs
+verbatim in its mirrored source); drafts annotating every unsupported claim
+and published, sealed versions carrying none; held lines and held documents
+leaking into no report type; and marker-laden prose falling back to the
+deterministic render. What a live model proposes — citation validity and
+claim coverage on the generation side — is unmeasured, and the evidence
+records it as an explicit gap rather than a number.

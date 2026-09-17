@@ -65,9 +65,13 @@ Upload documents through the operator API (`POST /api/corpus`). Text files
 parse immediately; PDFs, office files, and images land in held lanes with
 their bytes in R2. `POST /api/corpus/drain` runs the model pass — with no
 capable provider configured, each file stays held with a reason naming the
-capability you need to add. Held bytes live in R2 only for the 24-hour retry
+capability you need to add. Held bytes live in R2 only for their retention
 window: a successful drain deletes them immediately, and the scheduled sweep
-deletes anything no drain reached and records the receipt in `audit`.
+deletes anything no drain reached and records a deletion receipt. The
+window is 24 hours by default and configurable per category with `GET
+/api/retention` and `PUT /api/retention` (whole hours, bounded — a request
+outside the bounds, or for a category that is retained as the investigation's
+record, is refused with a reason).
 
 ## 4. Running the investigation
 
@@ -81,9 +85,16 @@ deletes anything no drain reached and records the receipt in `audit`.
 ## 5. Scheduled digests
 
 The cron trigger (`0 6 * * *`) runs `scheduled()`: first the raw-byte
-retention sweep deletes attachment and held-corpus bytes whose retry window
-has lapsed — including files no drain ever reached — and writes a receipt to
-`audit`; then `evaluateAll` renders reports with a lapsed cadence, crossed
+retention sweep deletes attachment and held-corpus bytes whose configured
+window has lapsed — including files no drain ever reached — and records a
+deletion receipt naming every swept category, its counts and whether each
+delete was verified. Read the receipts at `GET /api/retention/sweeps`
+(newest first, counts only), which also shows the live `overdue` view: raw
+rows past their window that still hold bytes. A failed or unconfirmed
+delete keeps its raw key, retries on the next sweep, and stays in
+`overdue` meanwhile; `POST /api/retention/sweep` runs the sweep on demand
+to retry without waiting for the cron. Then `evaluateAll`
+renders reports with a lapsed cadence, crossed
 per-N threshold, or full-dynamic change, through the same gated publish path.
 Every evaluation writes a receipt (`eval_receipts`) — audit them there.
 
@@ -121,6 +132,29 @@ binding audited over HTTP, then a primitives phase that exercises real
 queue delivery and retry, Workflow execution and persisted resume, and R2
 range and delete behaviour. Every receipt names what it exercised;
 failures name the primitive (`queue:*`, `workflow:*`, `r2:*`).
+
+## 5c. Residency and data flows
+
+The installation runs in your Cloudflare account, not in Australia:
+Cloudflare offers no Australian storage jurisdiction for D1 or R2 (European
+Union, United States and FedRAMP only), and Workers execute on the global
+edge. Provisioning configures no jurisdiction restriction, so information
+may be stored and processed outside Australia, and Surveyor does not claim
+otherwise (ADR-0019). The generated privacy and collection notices state the
+same facts for sources.
+
+`GET /api/residency` (operator-only) returns the live map: every recipient
+that may handle personal information — Cloudflare's services and each
+configured BYOK provider whose key is present — with the regions each may
+process in, the source of each region statement (a platform fact, the
+committed provider review, or not recorded) and whether the recipient may
+process data overseas. The map updates as providers are added or removed.
+
+`POST /api/residency/receipts` records an append-only snapshot of the map;
+`GET /api/residency/receipts` lists the receipts and
+`GET /api/residency/receipts/<id>/export` downloads the markdown receipt for
+the APP 8 record. Provisioning records a receipt automatically, naming
+Cloudflare and any provider already configured at that point.
 
 ## 6. Teardown
 
@@ -191,3 +225,11 @@ each names the claim that changed.
   touched" after using a scoped token. Rotation is deliberate, requires
   resealing existing rows, and a needless rotation is what orphans sealed
   data; the line now warns against it.
+- **2026-09-17** — the retention window was stated as a fixed 24 hours. It is
+  per data category with safe defaults and bounds (D1, #44): the default is
+  unchanged, the operator configures it through `GET/PUT /api/retention`, and
+  the sweep receipt names the windows it enforced.
+- **2026-09-17** — "runs in your own Cloudflare account" could be read as
+  "in Australia". It is not: Cloudflare offers no Australian storage
+  jurisdiction for D1 or R2. Section 5c now states the cross-border posture
+  and the data-flow map and receipts (D6, #49).
