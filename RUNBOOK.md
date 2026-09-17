@@ -107,6 +107,12 @@ Against the local runtime (workerd via wrangler, no account needed):
 npm run smoke:runtime
 ```
 
+Two phases, both booting the build in workerd: `wrangler dev` with every
+binding audited over HTTP, then a primitives phase that exercises real
+queue delivery and retry, Workflow execution and persisted resume, and R2
+range and delete behaviour. Every receipt names what it exercised;
+failures name the primitive (`queue:*`, `workflow:*`, `r2:*`).
+
 ## 6. Teardown
 
 The wizard's teardown screen resets local state and reports exactly what

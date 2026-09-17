@@ -105,7 +105,8 @@ The platform ships as one installation per investigation. Security fixes land on
 `npm ci && npm run typecheck && npm test && npm run build` must be green on every
 push/PR touching the platform, with `npm run smoke:runtime` on a slower schedule
 (R8/FR-043). The local-runtime smoke boots workerd and exercises the
-ciphertext-only audit and header policy.
+ciphertext-only audit and header policy, plus the queue consumer, Workflow
+entry and R2 range and delete semantics (A10).
 
 ## Errata
 

@@ -36,7 +36,7 @@ To install for real, see [RUNBOOK.md](RUNBOOK.md) and
 | `npm test` | Unit + integration suite |
 | `npm run typecheck` | TypeScript, strict |
 | `npm run build` | Worker bundle + smoke helper |
-| `npm run smoke:runtime` | Boot workerd locally and smoke it |
+| `npm run smoke:runtime` | Boot workerd locally: HTTP surface + queue, Workflow and R2 primitives |
 | `npm run smoke -- <url> [--token t]` | Smoke a deployed installation |
 
 ## Security testing (Niro)

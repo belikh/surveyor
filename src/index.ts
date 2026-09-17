@@ -35,6 +35,7 @@ import {
   type OAuthConfig,
 } from "./lib/oauth";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { WorkflowEntrypoint } from "cloudflare:workers";
 import {
   provisionStack,
   teardownStack,
@@ -879,23 +880,6 @@ app.post("/api/teardown", async (c) => {
   );
 });
 
-/** WorkflowEntrypoint is a workerd global; the types package only
- *  declares it. Resolve the runtime class from globalThis with an inert
- *  fallback so Node-based tests can import this module. */
-type WorkflowBaseCtor = new (
-  ctx: ExecutionContext,
-  env: Bindings,
-) => CloudflareWorkersModule.WorkflowEntrypoint<Bindings>;
-const WorkflowBaseClass = ((
-  globalThis as unknown as { WorkflowEntrypoint?: WorkflowBaseCtor }
-).WorkflowEntrypoint ??
-  class {
-    protected env!: Bindings;
-    constructor(_ctx: ExecutionContext, env: Bindings) {
-      this.env = env;
-    }
-  }) as unknown as WorkflowBaseCtor;
-
 export interface EngineParams {
   line_id?: string;
   angle_id?: string;
@@ -903,8 +887,13 @@ export interface EngineParams {
 
 /** Staged pipeline entrypoint: research-line bookkeeping and scheduled
  *  digests. Extraction/serving stays with the HTTP paths so steps remain
- *  resumable without duplicating provider calls. */
-export class EngineWorkflow extends WorkflowBaseClass {
+ *  resumable without duplicating provider calls.
+ *
+ *  The base class must be the runtime's own `WorkflowEntrypoint` (from
+ *  `cloudflare:workers`), not a look-alike: workerd addresses this class as
+ *  the workflow's named entrypoint, and an inert fallback would refuse to
+ *  run ("not an actor") the moment an instance is created. */
+export class EngineWorkflow extends WorkflowEntrypoint<Bindings, EngineParams> {
   async run(
     event: CloudflareWorkersModule.WorkflowEvent<EngineParams>,
     step: CloudflareWorkersModule.WorkflowStep,

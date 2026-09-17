@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Self-serve Cloudflare-native investigation platform: provisions and runs one anonymous-submission investigation per installation.",
   "scripts": {
-    "build": "npm run build:pdf && npm run build:pdf-worker && esbuild src/index.ts --bundle --format=esm --platform=browser --main-fields=module,main --loader:.sql=text --loader:.txt=text --outfile=dist/worker.js --target=es2022 && esbuild src/lib/smoke.ts --bundle --format=esm --platform=node --outfile=dist/smoke-lib.js --target=node20",
+    "build": "npm run build:pdf && npm run build:pdf-worker && esbuild src/index.ts --bundle --format=esm --platform=browser --main-fields=module,main --loader:.sql=text --loader:.txt=text --external:cloudflare:workers --outfile=dist/worker.js --target=es2022 && esbuild src/lib/smoke.ts --bundle --format=esm --platform=node --outfile=dist/smoke-lib.js --target=node20",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
